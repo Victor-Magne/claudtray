@@ -1,0 +1,375 @@
+/* ClaudeBar — Windows 11 Fluent styling (Dark + Light) */
+
+:root {
+  /* status colours (shared) */
+  --healthy: #3fd37a;
+  --warning: #f5b942;
+  --critical: #ff5d6c;
+  --depleted: #8b93a3;
+  --accent: #4cc2ff; /* Win11 accent blue */
+  --radius: 8px;
+}
+
+/* ---- Dark (default) ---- */
+html[data-theme="dark"] {
+  --app-bg: rgba(20, 22, 28, 0.55);
+  --fg: #ffffff;
+  --fg-dim: rgba(255, 255, 255, 0.55);
+  --fg-faint: rgba(255, 255, 255, 0.35);
+  --card-bg: rgba(255, 255, 255, 0.05);
+  --card-border: rgba(255, 255, 255, 0.08);
+  --chip-bg: rgba(255, 255, 255, 0.06);
+  --chip-active: rgba(76, 194, 255, 0.18);
+  --track: rgba(255, 255, 255, 0.12);
+  --btn-bg: rgba(255, 255, 255, 0.06);
+  --btn-border: rgba(255, 255, 255, 0.10);
+  --window-border: rgba(255, 255, 255, 0.08);
+  --overlay: rgba(20, 22, 28, 0.92);
+}
+
+/* ---- Light ---- */
+html[data-theme="light"] {
+  --app-bg: rgba(244, 244, 247, 0.68);
+  --fg: #1a1a1a;
+  --fg-dim: rgba(0, 0, 0, 0.55);
+  --fg-faint: rgba(0, 0, 0, 0.40);
+  --card-bg: rgba(255, 255, 255, 0.65);
+  --card-border: rgba(0, 0, 0, 0.08);
+  --chip-bg: rgba(0, 0, 0, 0.04);
+  --chip-active: rgba(0, 120, 212, 0.14);
+  --track: rgba(0, 0, 0, 0.10);
+  --btn-bg: rgba(255, 255, 255, 0.70);
+  --btn-border: rgba(0, 0, 0, 0.10);
+  --window-border: rgba(0, 0, 0, 0.08);
+  --overlay: rgba(243, 243, 243, 0.94);
+  --accent: #0078d4;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  color: var(--fg);
+  background: transparent; /* let the Mica backdrop show through */
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+  overflow: hidden;
+}
+
+#app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  /* Translucent themed tint over the Mica backdrop. Also guarantees legible
+     contrast on systems where Mica is unavailable (Win10 / DWM disabled). */
+  background: var(--app-bg);
+  border: 1px solid var(--window-border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  padding: 14px 14px 10px;
+  gap: 12px;
+}
+
+/* ---- Header ---- */
+header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, var(--accent), #8a6cff);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 13px;
+  color: #fff;
+  flex: 0 0 auto;
+}
+
+.titles {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.titles .name {
+  font-weight: 600;
+  font-size: 15px;
+}
+.titles .sub {
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+
+header .spacer {
+  flex: 1;
+}
+
+.global-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+}
+.global-pill .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--depleted);
+}
+
+.updated {
+  font-size: 11px;
+  color: var(--fg-faint);
+  padding-left: 2px;
+}
+
+/* ---- Provider tabs ---- */
+.tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.tab {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: var(--chip-bg);
+  color: var(--fg-dim);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.tab:hover {
+  color: var(--fg);
+}
+.tab.active {
+  background: var(--chip-active);
+  color: var(--fg);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* ---- Cards ---- */
+.cards {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-content: start;
+  overflow-y: auto;
+}
+.cards::-webkit-scrollbar {
+  width: 6px;
+}
+.cards::-webkit-scrollbar-thumb {
+  background: var(--track);
+  border-radius: 3px;
+}
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: var(--radius);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 104px;
+}
+.card.wide {
+  grid-column: 1 / -1;
+}
+
+.card .top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.card .wlabel {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--fg-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: #06140d;
+}
+
+.pct {
+  font-size: 30px;
+  font-weight: 650;
+  line-height: 1;
+}
+.pct small {
+  font-size: 15px;
+  color: var(--fg-dim);
+  font-weight: 500;
+  margin-left: 1px;
+}
+
+.bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+}
+.bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.35s ease;
+}
+
+.reset {
+  font-size: 10.5px;
+  color: var(--fg-faint);
+}
+
+/* unavailable provider */
+.empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 160px;
+  color: var(--fg-dim);
+  text-align: center;
+}
+.empty .big {
+  font-size: 26px;
+  opacity: 0.5;
+}
+
+/* status helpers */
+.s-healthy {
+  background: var(--healthy);
+}
+.s-warning {
+  background: var(--warning);
+}
+.s-critical {
+  background: var(--critical);
+}
+.s-depleted {
+  background: var(--depleted);
+}
+.badge.s-warning {
+  color: #1c1402;
+}
+.badge.s-depleted {
+  color: #0c0f14;
+}
+
+/* ---- Footer ---- */
+footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.btn:hover {
+  background: var(--chip-active);
+}
+.btn.icon {
+  padding: 6px 8px;
+}
+footer .spacer {
+  flex: 1;
+}
+
+/* ---- Settings overlay ---- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--overlay);
+  backdrop-filter: blur(4px);
+  display: none;
+  flex-direction: column;
+  padding: 16px;
+  gap: 14px;
+  border-radius: var(--radius);
+}
+.overlay.open {
+  display: flex;
+}
+.overlay h2 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field label {
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+.seg {
+  display: flex;
+  gap: 6px;
+}
+.seg .tab {
+  flex: 1;
+  text-align: center;
+}
+.field input {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--btn-border);
+  background: var(--card-bg);
+  color: var(--fg);
+}
+.spin {
+  animation: spin 0.9s linear infinite;
+  display: inline-block;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

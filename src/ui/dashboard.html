@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="pt" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ClaudeBar</title>
+    <style>
+__CLAUDEBAR_CSS__
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <div class="logo">AI</div>
+        <div class="titles">
+          <span class="name">ClaudeBar</span>
+          <span class="sub">AI Usage Monitor</span>
+        </div>
+        <div class="spacer"></div>
+        <div class="global-pill">
+          <span class="dot" id="global-dot"></span>
+          <span id="global-status">—</span>
+        </div>
+      </header>
+
+      <div class="updated" id="updated">A carregar…</div>
+
+      <div class="tabs" id="tabs"></div>
+
+      <div class="cards" id="cards"></div>
+
+      <footer>
+        <button class="btn" id="btn-refresh">↻ Atualizar</button>
+        <div class="spacer"></div>
+        <button class="btn icon" id="btn-theme" title="Alternar tema">◐</button>
+        <button class="btn icon" id="btn-settings" title="Definições">⚙</button>
+        <button class="btn icon" id="btn-close" title="Fechar">✕</button>
+      </footer>
+    </div>
+
+    <!-- Settings overlay -->
+    <div class="overlay" id="settings">
+      <h2>Definições</h2>
+      <div class="field">
+        <label>Tema</label>
+        <div class="seg" id="theme-seg">
+          <div class="tab" data-theme-value="dark">Escuro</div>
+          <div class="tab" data-theme-value="light">Claro</div>
+          <div class="tab" data-theme-value="system">Sistema</div>
+        </div>
+      </div>
+      <div class="field">
+        <label>Token GitHub (Copilot) — opcional</label>
+        <input id="copilot-token" type="password" placeholder="ghp_…" />
+      </div>
+      <footer>
+        <button class="btn" id="btn-save">Guardar</button>
+        <div class="spacer"></div>
+        <button class="btn" id="btn-settings-close">Fechar</button>
+      </footer>
+    </div>
+
+    <script>
+__CLAUDEBAR_JS__
+    </script>
+  </body>
+</html>

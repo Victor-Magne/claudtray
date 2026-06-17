@@ -1,0 +1,18 @@
+[package]
+name = "claudebar-rs"
+version = "0.4.68"
+edition = "2021"
+
+[dependencies]
+tao = "0.31"
+tray-icon = "0.19"
+tokio = { version = "1.35", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "5.0"
+wry = { version = "0.55.1", features = ["transparent"] }
+window-vibrancy = "0.7.1"
+sysinfo = "0.39.3"
+netstat2 = "0.11.2"
+ureq = "3.3.0"
