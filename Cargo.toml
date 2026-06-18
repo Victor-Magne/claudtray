@@ -1,7 +1,14 @@
 [package]
-name = "claudebar-rs"
-version = "0.4.68"
+name = "cloudtray"
+version = "1.0.0"
 edition = "2021"
+description = "Real-time AI usage monitor (Claude Code, Copilot, Codex) in the Windows system tray"
+license = "MIT"
+homepage = "https://github.com/Victor-Magne/cloudtray"
+repository = "https://github.com/Victor-Magne/cloudtray"
+readme = "README.md"
+keywords = ["claude", "ai", "usage", "monitor", "tray"]
+categories = ["gui"]
 
 [dependencies]
 tao = "0.31"

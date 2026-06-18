@@ -1,4 +1,4 @@
-// ClaudeBar dashboard logic. Receives snapshots from Rust via window.updateData
+// CloudTray dashboard logic. Receives snapshots from Rust via window.updateData
 // and sends user actions back through the wry IPC bridge.
 
 let DATA = null;

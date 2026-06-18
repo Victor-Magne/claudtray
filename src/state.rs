@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 /// Persisted application state, stored at
-/// `%APPDATA%/ClaudeBar/state.json` (via `dirs::config_dir`).
+/// `%APPDATA%/CloudTray/state.json` (via `dirs::config_dir`).
 ///
 /// Holds the user's theme choice, the optional Copilot token and — crucially
 /// for the auto-detected budgets — the highest token usage ever observed for
@@ -41,7 +41,7 @@ impl Default for AppState {
 
 impl AppState {
     pub fn config_path() -> Option<PathBuf> {
-        dirs::config_dir().map(|d| d.join("ClaudeBar").join("state.json"))
+        dirs::config_dir().map(|d| d.join("CloudTray").join("state.json"))
     }
 
     pub fn load() -> Self {

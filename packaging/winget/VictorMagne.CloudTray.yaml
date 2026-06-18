@@ -1,0 +1,13 @@
+# winget version manifest
+# Submit to: https://github.com/microsoft/winget-pkgs
+# Path in that repo: manifests/v/VictorMagne/CloudTray/<version>/
+#
+# After a release:
+#   1. Replace <VERSION> with the release version (e.g. 1.0.0)
+#   2. Submit all three manifest files under the versioned path
+
+PackageIdentifier: VictorMagne.CloudTray
+PackageVersion: <VERSION>
+DefaultLocale: en-US
+ManifestType: version
+ManifestVersion: 1.6.0

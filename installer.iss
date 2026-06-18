@@ -1,8 +1,8 @@
-#define MyAppName      "ClaudeBar"
+#define MyAppName      "CloudTray"
 #define MyAppVersion   "1.0.0"
-#define MyAppPublisher "Victor Gomes"
-#define MyAppExeName   "claudebar-rs.exe"
-#define MyAppURL       "https://github.com/tddworks/ClaudeBar"
+#define MyAppPublisher "Victor Magne"
+#define MyAppExeName   "cloudtray.exe"
+#define MyAppURL       "https://github.com/Victor-Magne/cloudtray"
 
 [Setup]
 AppId={{F3A7B2C1-8D4E-4F9A-B6C2-1E5D7A3F8B9C}
@@ -26,25 +26,25 @@ WizardStyle=modern
 
 ; Output
 OutputDir=.\installer_output
-OutputBaseFilename=ClaudeBar_Setup_{#MyAppVersion}
+OutputBaseFilename=CloudTray_Setup_{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 
 ; Branding
-SetupIconFile=assets\claudebar.ico
+SetupIconFile=assets\cloudtray.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 
 [Messages]
 WelcomeLabel2=Bem-vindo ao instalador do [name]!%n%nEste programa monitoriza o uso de assistentes de IA (Claude Code, Codex, Antigravity, GitHub Copilot) em tempo real na barra de tarefas do Windows.%n%nClica em Seguinte para continuar.
-FinishedLabel=A instalação do [name] está concluída.%n%nPodes iniciá-lo a qualquer momento pelo Menu Iniciar ou procurando por "ClaudeBar".
+FinishedLabel=A instalação do [name] está concluída.%n%nPodes iniciá-lo a qualquer momento pelo Menu Iniciar ou procurando por "CloudTray".
 
 [Files]
 ; App executable (CRT statically linked — no MSVC Redist needed)
 Source: "target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 ; App icon
-Source: "assets\claudebar.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "assets\cloudtray.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 ; WebView2 Evergreen Bootstrapper — extracted to temp only when needed
 ; (~1.6 MB, downloads from Microsoft if WebView2 is absent on the machine)
@@ -54,7 +54,7 @@ Source: "assets\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; \
 [Icons]
 ; Start Menu — searchable via Windows Search
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
-  IconFilename: "{app}\claudebar.ico"; \
+  IconFilename: "{app}\cloudtray.ico"; \
   Comment: "Monitor de uso de IA em tempo real"
 Name: "{group}\Desinstalar {#MyAppName}"; Filename: "{uninstallexe}"
 

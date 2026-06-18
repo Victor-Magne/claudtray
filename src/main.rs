@@ -28,11 +28,11 @@ async fn main() {
 
     let monitor: SharedMonitor = Arc::new(Mutex::new(QuotaMonitor::new()));
 
-    // Debug helper: `CLAUDEBAR_DUMP=1 claudebar-rs` writes one snapshot to
-    // %TEMP%/claudebar_snapshot.json and exits (no UI).
-    if std::env::var("CLAUDEBAR_DUMP").is_ok() {
+    // Debug helper: `CLOUDTRAY_DUMP=1 cloudtray` writes one snapshot to
+    // %TEMP%/cloudtray_snapshot.json and exits (no UI).
+    if std::env::var("CLOUDTRAY_DUMP").is_ok() {
         let snap = monitor.lock().unwrap().refresh();
-        let path = std::env::temp_dir().join("claudebar_snapshot.json");
+        let path = std::env::temp_dir().join("cloudtray_snapshot.json");
         let _ = std::fs::write(&path, serde_json::to_string_pretty(&snap).unwrap_or_default());
         return;
     }
@@ -58,7 +58,7 @@ async fn main() {
     let menu_for_manual_show = tray_menu.clone();
 
     let initial_status = last.as_ref().map(|s| s.worst_status()).unwrap_or(Status::Healthy);
-    let initial_tooltip = last.as_ref().map(|s| tooltip(s)).unwrap_or_else(|| "ClaudeBar — a carregar…".to_string());
+    let initial_tooltip = last.as_ref().map(|s| tooltip(s)).unwrap_or_else(|| "CloudTray — a carregar…".to_string());
 
     let icon = Icon::from_rgba(generate_dynamic_icon(initial_status), 64, 64)
         .expect("ícone RGBA inválido");
@@ -304,8 +304,8 @@ fn tooltip(snap: &Snapshot) -> String {
                 .map(|w| w.remaining_pct)
         };
         if let (Some(s), Some(w)) = (pct("session"), pct("weekly")) {
-            return format!("ClaudeBar — SESSION {}% · WEEKLY {}%", s, w);
+            return format!("CloudTray — SESSION {}% · WEEKLY {}%", s, w);
         }
     }
-    "ClaudeBar — AI Usage Monitor".to_string()
+    "CloudTray — AI Usage Monitor".to_string()
 }

@@ -1,9 +1,9 @@
 fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winres::WindowsResource::new();
-        res.set_icon("assets/claudebar.ico");
-        res.set("ProductName", "ClaudeBar");
-        res.set("FileDescription", "ClaudeBar — AI Usage Monitor");
+        res.set_icon("assets/cloudtray.ico");
+        res.set("ProductName", "CloudTray");
+        res.set("FileDescription", "CloudTray — AI Usage Monitor");
         res.set("LegalCopyright", "Victor Gomes");
         res.set_version_info(winres::VersionInfo::PRODUCTVERSION, 0x0001_0000_0000_0000);
         res.set_version_info(winres::VersionInfo::FILEVERSION, 0x0001_0000_0000_0000);

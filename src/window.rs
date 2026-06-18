@@ -39,8 +39,8 @@ fn build_html() -> String {
     let html = include_str!("ui/dashboard.html");
     let css = include_str!("ui/dashboard.css");
     let js = include_str!("ui/dashboard.js");
-    html.replace("__CLAUDEBAR_CSS__", css)
-        .replace("__CLAUDEBAR_JS__", js)
+    html.replace("__CLOUDTRAY_CSS__", css)
+        .replace("__CLOUDTRAY_JS__", js)
 }
 
 fn parse_ipc(body: &str) -> Option<IpcMessage> {
@@ -79,7 +79,7 @@ impl Dashboard {
         dark: bool,
     ) -> Self {
         let window = WindowBuilder::new()
-            .with_title("ClaudeBar")
+            .with_title("CloudTray")
             .with_inner_size(LogicalSize::new(WIDTH, HEIGHT))
             .with_decorations(false)
             .with_resizable(false)

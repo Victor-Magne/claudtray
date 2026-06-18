@@ -1,0 +1,22 @@
+{
+  "version": "<VERSION>",
+  "description": "Real-time AI usage monitor (Claude Code, Copilot, Codex) in the Windows system tray",
+  "homepage": "https://github.com/Victor-Magne/cloudtray",
+  "license": "MIT",
+  "url": "https://github.com/Victor-Magne/cloudtray/releases/download/v<VERSION>/cloudtray.exe",
+  "hash": "sha256:<SHA256_OF_EXE>",
+  "bin": "cloudtray.exe",
+  "shortcuts": [
+    ["cloudtray.exe", "CloudTray"]
+  ],
+  "persist": [],
+  "checkver": {
+    "github": "https://github.com/Victor-Magne/cloudtray"
+  },
+  "autoupdate": {
+    "url": "https://github.com/Victor-Magne/cloudtray/releases/download/v$version/cloudtray.exe",
+    "hash": {
+      "url": "https://github.com/Victor-Magne/cloudtray/releases/download/v$version/cloudtray.exe.sha256"
+    }
+  }
+}
