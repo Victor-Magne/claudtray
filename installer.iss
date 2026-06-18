@@ -26,7 +26,7 @@ WizardStyle=modern
 
 ; Output
 OutputDir=.\installer_output
-OutputBaseFilename=CloudTray_Setup_{#MyAppVersion}
+OutputBaseFilename=CloudTray
 Compression=lzma2/ultra64
 SolidCompression=yes
 
