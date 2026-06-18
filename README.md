@@ -2,9 +2,9 @@
 
 > Windows port of [ClaudeBar](https://github.com/tddworks/ClaudeBar) — a system tray app that monitors your AI assistant usage quotas in real time.
 
-[![Release](https://img.shields.io/github/v/release/Victor-Magne/cloudtray)](https://github.com/Victor-Magne/cloudtray/releases/latest)
+[![Release](https://img.shields.io/github/v/release/Victor-Magne/claudtray)](https://github.com/Victor-Magne/claudtray/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%2B-blue)](https://github.com/Victor-Magne/cloudtray/releases/latest)
+[![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%2B-blue)](https://github.com/Victor-Magne/claudtray/releases/latest)
 
 CloudTray lives in the Windows system tray and gives you an at-a-glance coloured indicator of your remaining quota for Claude Code and other AI tools — no browser, no manual checking.
 
