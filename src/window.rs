@@ -1,10 +1,13 @@
 use crate::model::Snapshot;
 use tao::dpi::{LogicalSize, PhysicalPosition};
 use tao::event_loop::{EventLoopProxy, EventLoopWindowTarget};
-use tao::platform::windows::WindowBuilderExtWindows;
+use tao::platform::windows::{WindowBuilderExtWindows, WindowExtWindows};
 use tao::window::{Window, WindowBuilder};
 use window_vibrancy::apply_mica;
 use wry::{WebView, WebViewBuilder};
+// Duplicate import removed
+use serde_json;
+
 
 const WIDTH: f64 = 380.0;
 const HEIGHT: f64 = 600.0;
@@ -28,6 +31,8 @@ pub enum IpcMessage {
     SetTheme(String),
     SetCopilotToken(String),
     Close,
+    /// The webview lost focus to another window (click-away).
+    Blur,
 }
 
 fn build_html() -> String {
@@ -44,10 +49,15 @@ fn parse_ipc(body: &str) -> Option<IpcMessage> {
         "ready" => Some(IpcMessage::Ready),
         "refresh" => Some(IpcMessage::Refresh),
         "close" => Some(IpcMessage::Close),
-        "setTheme" => Some(IpcMessage::SetTheme(v.get("theme")?.as_str()?.to_string())),
-        "setCopilotToken" => Some(IpcMessage::SetCopilotToken(
-            v.get("token")?.as_str()?.to_string(),
-        )),
+        "blur" => Some(IpcMessage::Blur),
+        "setTheme" => {
+            let theme = v.get("theme")?.as_str()?.to_string();
+            Some(IpcMessage::SetTheme(theme))
+        }
+        "setCopilotToken" => {
+            let token = v.get("token")?.as_str()?.to_string();
+            Some(IpcMessage::SetCopilotToken(token))
+        }
         _ => None,
     }
 }
@@ -88,7 +98,10 @@ impl Dashboard {
             .with_html(build_html())
             .with_ipc_handler(move |req| {
                 if let Some(msg) = parse_ipc(req.body()) {
+                    println!("Received IPC: {:?}", msg);
                     let _ = proxy.send_event(UserEvent::Ipc(msg));
+                } else {
+                    println!("Failed to parse IPC: {}", req.body());
                 }
             })
             .build(&window)
@@ -114,10 +127,17 @@ impl Dashboard {
         self.visible
     }
 
+    pub fn hwnd(&self) -> isize {
+        self.window.hwnd() as isize
+    }
+
     pub fn show(&mut self) {
         self.position_bottom_right();
         self.window.set_visible(true);
         self.window.set_focus();
+        // Give the webview real keyboard focus so it receives Esc and fires
+        // `blur` on click-away (the parent window's focus alone is not enough).
+        let _ = self.webview.focus();
         self.visible = true;
     }
 

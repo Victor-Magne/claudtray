@@ -19,6 +19,9 @@ pub struct AppState {
 
     #[serde(default)]
     pub copilot_token: Option<String>,
+
+    #[serde(default)]
+    pub last_snapshot: Option<crate::model::Snapshot>,
 }
 
 fn default_theme() -> String {
@@ -31,6 +34,7 @@ impl Default for AppState {
             theme: default_theme(),
             observed_max: HashMap::new(),
             copilot_token: None,
+            last_snapshot: None,
         }
     }
 }
@@ -60,16 +64,5 @@ impl AppState {
         if let Ok(s) = serde_json::to_string_pretty(self) {
             let _ = std::fs::write(&path, s);
         }
-    }
-
-    /// Record an observation for `key` and return the running maximum. The
-    /// maximum only ever grows, so the remaining-percentage estimate stays
-    /// stable across refreshes.
-    pub fn observe(&mut self, key: &str, used: u64) -> u64 {
-        let entry = self.observed_max.entry(key.to_string()).or_insert(0);
-        if used > *entry {
-            *entry = used;
-        }
-        *entry
     }
 }

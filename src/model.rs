@@ -1,9 +1,9 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Health status of a usage window. Mirrors the colour rules used by the
 /// macOS ClaudeBar: >50% remaining = Healthy (green), 20-50% = Warning
 /// (yellow), 1-19% = Critical (red), 0% / no data = Depleted (gray).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
     Healthy,
@@ -37,7 +37,7 @@ impl Status {
 }
 
 /// A single usage window (e.g. SESSION / WEEKLY / OPUS).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WindowUsage {
     /// Stable key, e.g. "session" | "weekly" | "opus".
     pub key: String,
@@ -48,36 +48,15 @@ pub struct WindowUsage {
     pub budget: u64,
     pub remaining_pct: u32,
     pub status: Status,
-    /// RFC3339 (local offset) timestamp of when the oldest usage in this
-    /// rolling window expires. `None` if there is no activity.
+    /// RFC3339 (local offset) timestamp of when the window resets. `None` if
+    /// unknown.
     pub reset_at: Option<String>,
-    /// When true the monitor applies auto-detected budgets (token-based
-    /// providers like Claude). When false the window already carries a known
-    /// remaining percentage from the provider (Codex/Antigravity/Copilot).
-    #[serde(skip)]
-    pub auto: bool,
 }
 
 impl WindowUsage {
-    /// Build a window with only the raw measurement filled in. The budget,
-    /// remaining percentage and status are computed later by the monitor via
-    /// [`WindowUsage::finalize`] so the auto-detect logic lives in one place.
-    pub fn raw(key: &str, label: &str, used_tokens: u64, reset_at: Option<String>) -> Self {
-        Self {
-            key: key.to_string(),
-            label: label.to_string(),
-            used_tokens,
-            budget: 0,
-            remaining_pct: 100,
-            status: Status::Depleted,
-            reset_at,
-            auto: true,
-        }
-    }
-
-    /// Build a window from a known remaining percentage (providers that report
-    /// usage directly, e.g. Codex/Antigravity/Copilot). Not touched by the
-    /// monitor's budget auto-detection.
+    /// Build a window from a known remaining percentage. Every provider now
+    /// reports usage directly (Claude/Codex/Antigravity/Copilot via their APIs
+    /// or local rate-limit snapshots).
     pub fn from_percent(key: &str, label: &str, remaining_pct: u32, reset_at: Option<String>) -> Self {
         let remaining_pct = remaining_pct.min(100);
         Self {
@@ -88,32 +67,11 @@ impl WindowUsage {
             remaining_pct,
             status: Status::from_remaining(remaining_pct, true),
             reset_at,
-            auto: false,
         }
-    }
-
-    /// Apply the auto-detected `budget` (max of the historical usage peak and a
-    /// sane default floor, computed by the monitor) and derive the remaining
-    /// percentage + status. An idle window reads ~100% (as the macOS ClaudeBar
-    /// shows OPUS at 100% when unused); it only reaches 0% once usage exceeds
-    /// the whole observed history.
-    pub fn finalize(&mut self, budget: u64) {
-        self.budget = budget;
-        if budget == 0 {
-            self.remaining_pct = 100;
-            self.status = Status::Healthy;
-            return;
-        }
-        self.remaining_pct = if self.used_tokens >= budget {
-            0
-        } else {
-            (((budget - self.used_tokens) * 100) / budget) as u32
-        };
-        self.status = Status::from_remaining(self.remaining_pct, true);
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderSnapshot {
     /// Stable id, e.g. "claude".
     pub id: String,
@@ -139,7 +97,7 @@ impl ProviderSnapshot {
 }
 
 /// The full picture pushed to the dashboard on every refresh.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     /// RFC3339 (local offset) of when this snapshot was produced.
     pub updated_at: String,

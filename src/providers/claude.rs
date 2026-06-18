@@ -1,37 +1,44 @@
-use super::{modified_within, reset_at, window_sum, Provider, UsageRecord};
+use super::http::agent;
+use super::{reset_from_epoch, Provider};
 use crate::model::{ProviderSnapshot, WindowUsage};
 use crate::state::AppState;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Local, Utc};
 use serde::Deserialize;
-use std::collections::HashSet;
-use std::fs;
 
-const SESSION_HOURS: i64 = 5;
-const WEEK_DAYS: i64 = 7;
-
+/// Claude (claude.ai / Claude Code subscription). Reads the *real* usage that
+/// Claude Desktop shows, from Anthropic's OAuth usage endpoint, using the
+/// access token Claude Code stores in `~/.claude/.credentials.json`. The
+/// response reports `utilization` (percent USED) per rolling window, so the
+/// remaining percentage is `100 - utilization`.
 pub struct ClaudeProvider;
 
-// --- JSONL parsing structs (Claude Code transcript format) ---
+const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 
 #[derive(Deserialize)]
-struct JournalEntry {
-    #[serde(rename = "type")]
-    entry_type: Option<String>,
-    message: Option<JournalMessage>,
-    timestamp: Option<String>,
+struct Credentials {
+    #[serde(rename = "claudeAiOauth")]
+    oauth: Option<OAuth>,
 }
 
 #[derive(Deserialize)]
-struct JournalMessage {
-    id: Option<String>,
-    model: Option<String>,
-    usage: Option<TokenUsage>,
+struct OAuth {
+    #[serde(rename = "accessToken")]
+    access_token: Option<String>,
 }
 
 #[derive(Deserialize)]
-struct TokenUsage {
-    input_tokens: Option<u64>,
-    output_tokens: Option<u64>,
+struct UsageResponse {
+    five_hour: Option<Quota>,
+    seven_day: Option<Quota>,
+    seven_day_opus: Option<Quota>,
+}
+
+#[derive(Deserialize)]
+struct Quota {
+    /// Percent of the window already consumed (0-100).
+    utilization: Option<f64>,
+    /// When the window resets — ISO8601 string or epoch seconds.
+    resets_at: Option<serde_json::Value>,
 }
 
 impl Provider for ClaudeProvider {
@@ -44,50 +51,41 @@ impl Provider for ClaudeProvider {
     }
 
     fn collect(&self, _state: &AppState) -> ProviderSnapshot {
-        let projects_dir = match dirs::home_dir() {
-            Some(h) => h.join(".claude").join("projects"),
-            None => {
-                return ProviderSnapshot::unavailable(self.id(), self.name(), "Não detetado")
-            }
-        };
-
-        if !projects_dir.exists() {
+        let Some(token) = load_token() else {
             return ProviderSnapshot::unavailable(
                 self.id(),
                 self.name(),
-                "Claude Code não detetado",
+                "Inicia sessão no Claude Code",
             );
+        };
+
+        match fetch_usage(&token) {
+            Some(resp) => self.build(resp),
+            None => ProviderSnapshot::unavailable(
+                self.id(),
+                self.name(),
+                "Não foi possível obter o uso (token expirado?)",
+            ),
+        }
+    }
+}
+
+impl ClaudeProvider {
+    fn build(&self, resp: UsageResponse) -> ProviderSnapshot {
+        let mut windows = Vec::new();
+        if let Some(q) = resp.five_hour {
+            windows.push(window("session", "SESSION", q));
+        }
+        if let Some(q) = resp.seven_day {
+            windows.push(window("weekly", "WEEKLY", q));
+        }
+        if let Some(q) = resp.seven_day_opus {
+            windows.push(window("opus", "OPUS", q));
         }
 
-        let records = collect_records(&projects_dir);
-        let now = Utc::now();
-        let session_cutoff = now - Duration::hours(SESSION_HOURS);
-        let weekly_cutoff = now - Duration::days(WEEK_DAYS);
-
-        let (session_used, session_first) = window_sum(&records, session_cutoff, |_| true);
-        let (weekly_used, weekly_first) = window_sum(&records, weekly_cutoff, |_| true);
-        let (opus_used, opus_first) = window_sum(&records, weekly_cutoff, |r| r.is_opus);
-
-        let windows = vec![
-            WindowUsage::raw(
-                "session",
-                "SESSION",
-                session_used,
-                reset_at(session_first, Duration::hours(SESSION_HOURS)),
-            ),
-            WindowUsage::raw(
-                "weekly",
-                "WEEKLY",
-                weekly_used,
-                reset_at(weekly_first, Duration::days(WEEK_DAYS)),
-            ),
-            WindowUsage::raw(
-                "opus",
-                "OPUS",
-                opus_used,
-                reset_at(opus_first, Duration::days(WEEK_DAYS)),
-            ),
-        ];
+        if windows.is_empty() {
+            return ProviderSnapshot::unavailable(self.id(), self.name(), "Sem dados de uso");
+        }
 
         ProviderSnapshot {
             id: self.id().to_string(),
@@ -99,85 +97,59 @@ impl Provider for ClaudeProvider {
     }
 }
 
-/// Scan every project transcript modified in the last week and extract the
-/// per-message usage records, de-duplicated by message id.
-fn collect_records(projects_dir: &std::path::Path) -> Vec<UsageRecord> {
-    let mut records = Vec::new();
-    let mut seen_ids: HashSet<String> = HashSet::new();
-
-    let Ok(projects) = fs::read_dir(projects_dir) else {
-        return records;
-    };
-
-    for project_entry in projects.flatten() {
-        let Ok(files) = fs::read_dir(project_entry.path()) else {
-            continue;
-        };
-        for file_entry in files.flatten() {
-            let path = file_entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-            if !modified_within(&path, WEEK_DAYS) {
-                continue;
-            }
-            parse_file(&path, &mut seen_ids, &mut records);
-        }
-    }
-
-    records
+fn window(key: &str, label: &str, q: Quota) -> WindowUsage {
+    let used = q.utilization.unwrap_or(0.0).clamp(0.0, 100.0);
+    let remaining = (100.0 - used).round().clamp(0.0, 100.0) as u32;
+    let reset = q.resets_at.as_ref().and_then(parse_reset);
+    WindowUsage::from_percent(key, label, remaining, reset)
 }
 
-fn parse_file(
-    path: &std::path::Path,
-    seen_ids: &mut HashSet<String>,
-    records: &mut Vec<UsageRecord>,
-) {
-    let Ok(content) = fs::read_to_string(path) else {
-        return;
-    };
-
-    for line in content.lines() {
-        let Ok(entry) = serde_json::from_str::<JournalEntry>(line) else {
-            continue;
-        };
-        if entry.entry_type.as_deref() != Some("assistant") {
-            continue;
+fn parse_reset(v: &serde_json::Value) -> Option<String> {
+    if let Some(s) = v.as_str() {
+        if let Ok(dt) = s.parse::<DateTime<Utc>>() {
+            return Some(dt.with_timezone(&Local).to_rfc3339());
         }
-
-        let Some(ts) = entry
-            .timestamp
-            .as_ref()
-            .and_then(|ts| ts.parse::<DateTime<Utc>>().ok())
-        else {
-            continue;
-        };
-
-        let Some(msg) = &entry.message else {
-            continue;
-        };
-
-        // De-duplicate by message id (same id can appear across iteration lines).
-        if let Some(id) = &msg.id {
-            if !seen_ids.insert(id.clone()) {
-                continue;
-            }
+        if let Ok(n) = s.parse::<i64>() {
+            return reset_from_epoch(n);
         }
-
-        let Some(usage) = &msg.usage else {
-            continue;
-        };
-        let tokens = usage.input_tokens.unwrap_or(0) + usage.output_tokens.unwrap_or(0);
-        if tokens == 0 {
-            continue;
-        }
-
-        let is_opus = msg
-            .model
-            .as_deref()
-            .map(|m| m.to_ascii_lowercase().contains("opus"))
-            .unwrap_or(false);
-
-        records.push(UsageRecord { ts, tokens, is_opus });
+        return None;
     }
+    if let Some(n) = v.as_i64() {
+        return reset_from_epoch(n);
+    }
+    v.as_f64().and_then(|f| reset_from_epoch(f as i64))
+}
+
+/// Resolve the Claude Code OAuth access token: env override first, then the
+/// `~/.claude/.credentials.json` file.
+fn load_token() -> Option<String> {
+    if let Ok(t) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
+        if !t.is_empty() {
+            return Some(t);
+        }
+    }
+    let path = dirs::home_dir()?.join(".claude").join(".credentials.json");
+    let content = std::fs::read_to_string(path).ok()?;
+    let creds: Credentials = serde_json::from_str(&content).ok()?;
+    creds
+        .oauth?
+        .access_token
+        .filter(|t| !t.trim().is_empty())
+}
+
+fn fetch_usage(token: &str) -> Option<UsageResponse> {
+    let mut resp = agent(false)
+        .get(USAGE_URL)
+        .header("Authorization", format!("Bearer {}", token.trim()))
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("User-Agent", "ClaudeBar")
+        .call()
+        .ok()?;
+    if resp.status().as_u16() != 200 {
+        return None;
+    }
+    let text = resp.body_mut().read_to_string().ok()?;
+    serde_json::from_str::<UsageResponse>(&text).ok()
 }

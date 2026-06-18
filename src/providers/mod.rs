@@ -10,14 +10,14 @@ use crate::state::AppState;
 /// A monitored AI coding assistant. `collect` returns a snapshot with the raw
 /// per-window usage filled in; for token-based providers the budget/percentage
 /// are derived later by the monitor.
-pub trait Provider {
+pub trait Provider: Send + Sync {
     fn id(&self) -> &'static str;
     fn name(&self) -> &'static str;
     fn collect(&self, state: &AppState) -> ProviderSnapshot;
 }
 
 /// All providers, in display order.
-pub fn all() -> Vec<Box<dyn Provider>> {
+pub fn all() -> Vec<Box<dyn Provider + Send + Sync>> {
     vec![
         Box::new(claude::ClaudeProvider),
         Box::new(antigravity::AntigravityProvider),
@@ -31,43 +31,9 @@ pub fn all() -> Vec<Box<dyn Provider>> {
 use chrono::{DateTime, Duration, Local, Utc};
 use std::path::{Path, PathBuf};
 
-/// A single usage record extracted from a log line (token-based providers).
-pub struct UsageRecord {
-    pub ts: DateTime<Utc>,
-    pub tokens: u64,
-    pub is_opus: bool,
-}
-
-/// Format the reset instant for a rolling window: the earliest record in the
-/// window expires after `window` has elapsed. RFC3339 in the local timezone.
-pub fn reset_at(earliest: Option<DateTime<Utc>>, window: Duration) -> Option<String> {
-    earliest.map(|e| (e + window).with_timezone(&Local).to_rfc3339())
-}
-
 /// Convert an epoch-seconds reset timestamp to a local RFC3339 string.
 pub fn reset_from_epoch(secs: i64) -> Option<String> {
     DateTime::<Utc>::from_timestamp(secs, 0).map(|dt| dt.with_timezone(&Local).to_rfc3339())
-}
-
-/// Sum tokens and find the earliest timestamp among records matching `pred`.
-pub fn window_sum(
-    records: &[UsageRecord],
-    cutoff: DateTime<Utc>,
-    pred: impl Fn(&UsageRecord) -> bool,
-) -> (u64, Option<DateTime<Utc>>) {
-    let mut total = 0u64;
-    let mut earliest: Option<DateTime<Utc>> = None;
-    for r in records {
-        if r.ts < cutoff || !pred(r) {
-            continue;
-        }
-        total += r.tokens;
-        earliest = Some(match earliest {
-            Some(e) if e <= r.ts => e,
-            _ => r.ts,
-        });
-    }
-    (total, earliest)
 }
 
 /// True when the file was modified within the last `days` days.

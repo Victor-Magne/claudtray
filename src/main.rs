@@ -10,11 +10,12 @@ mod window;
 use model::{Snapshot, Status};
 use monitor::QuotaMonitor;
 use renderer::generate_dynamic_icon;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tao::event::{Event, WindowEvent};
+use tao::event::Event;
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, ContextMenu};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use window::{Dashboard, IpcMessage, UserEvent};
 
@@ -37,6 +38,7 @@ async fn main() {
     }
 
     let initial_dark = monitor.lock().unwrap().state.theme != "light";
+    let mut last: Option<Snapshot> = monitor.lock().unwrap().state.last_snapshot.clone();
 
     // --- Tray menu (fallback controls) ---
     let tray_menu = Menu::new();
@@ -53,12 +55,17 @@ async fn main() {
     let refresh_id = refresh_item.id().clone();
     let exit_id = exit_item.id().clone();
 
-    let icon = Icon::from_rgba(generate_dynamic_icon(Status::Healthy), 64, 64)
+    let menu_for_manual_show = tray_menu.clone();
+
+    let initial_status = last.as_ref().map(|s| s.worst_status()).unwrap_or(Status::Healthy);
+    let initial_tooltip = last.as_ref().map(|s| tooltip(s)).unwrap_or_else(|| "ClaudeBar — a carregar…".to_string());
+
+    let icon = Icon::from_rgba(generate_dynamic_icon(initial_status), 64, 64)
         .expect("ícone RGBA inválido");
     let mut tray: Option<TrayIcon> = Some(
         TrayIconBuilder::new()
             .with_menu(Box::new(tray_menu))
-            .with_tooltip("ClaudeBar — a carregar…")
+            .with_tooltip(initial_tooltip)
             .with_icon(icon)
             .build()
             .expect("falha ao criar o tray icon"),
@@ -66,15 +73,18 @@ async fn main() {
 
     // --- Dashboard popover (starts hidden) ---
     let mut dashboard = Dashboard::new(&event_loop, proxy.clone(), initial_dark);
-    let mut last: Option<Snapshot> = None;
 
-    // First refresh + background ticker (every 60s). All refreshes run off the
-    // UI thread because providers may do network I/O.
+    // First refresh + adaptive background ticker. While the popover is open we
+    // poll fast (near real-time); when it's hidden we slow down to spare the
+    // provider APIs. All refreshes run off the UI thread (network I/O).
     spawn_refresh(&monitor, &proxy);
+    let dashboard_open = Arc::new(AtomicBool::new(false));
     let tick_proxy = proxy.clone();
+    let ticker_open = Arc::clone(&dashboard_open);
     tokio::spawn(async move {
         loop {
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            let secs = if ticker_open.load(Ordering::Relaxed) { 5 } else { 60 };
+            tokio::time::sleep(Duration::from_secs(secs)).await;
             if tick_proxy.send_event(UserEvent::Tick).is_err() {
                 break;
             }
@@ -83,10 +93,16 @@ async fn main() {
 
     let menu_rx = MenuEvent::receiver();
     let tray_rx = TrayIconEvent::receiver();
-    let mut last_hide = Instant::now() - Duration::from_secs(10);
+    // Debounces tray clicks and guards the post-show focus settling.
+    let mut last_action = Instant::now() - Duration::from_secs(10);
+    let mut pending_left_click: Option<Instant> = None;
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(150));
+        if pending_left_click.is_some() {
+            *control_flow = ControlFlow::Poll;
+        } else {
+            *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(150));
+        }
 
         match event {
             Event::UserEvent(UserEvent::Tick) => spawn_refresh(&monitor, &proxy),
@@ -112,35 +128,93 @@ async fn main() {
                 }
                 IpcMessage::Close => {
                     dashboard.hide();
-                    last_hide = Instant::now();
+                    last_action = Instant::now();
+                }
+                IpcMessage::Blur => {
+                    // Click-away: the webview lost focus to another window. We
+                    // route this through the webview (not tao's Focused event)
+                    // because the WebView2 child window holds the real focus.
+                    // The grace period ignores the focus settling right after a
+                    // show.
+                    if dashboard.is_visible()
+                        && last_action.elapsed() > Duration::from_millis(600)
+                    {
+                        dashboard.hide();
+                        last_action = Instant::now();
+                    }
                 }
             },
             Event::WindowEvent {
-                event: WindowEvent::Focused(false),
+                event: tao::event::WindowEvent::Focused(false),
                 ..
             } => {
-                if dashboard.is_visible() {
+                if dashboard.is_visible()
+                    && last_action.elapsed() > Duration::from_millis(600)
+                {
                     dashboard.hide();
-                    last_hide = Instant::now();
+                    last_action = Instant::now();
+                }
+            }
+            Event::WindowEvent {
+                event: tao::event::WindowEvent::KeyboardInput {
+                    event: key_event,
+                    ..
+                },
+                ..
+            } => {
+                if key_event.state == tao::event::ElementState::Pressed
+                    && key_event.physical_key == tao::keyboard::KeyCode::Escape
+                {
+                    if dashboard.is_visible() {
+                        dashboard.hide();
+                        last_action = Instant::now();
+                    }
                 }
             }
             _ => {}
         }
 
-        // Tray icon click → toggle the popover.
-        if let Ok(TrayIconEvent::Click {
-            button: MouseButton::Left,
-            button_state: MouseButtonState::Up,
-            ..
-        }) = tray_rx.try_recv()
-        {
-            if dashboard.is_visible() {
-                dashboard.hide();
-                last_hide = Instant::now();
-            } else if last_hide.elapsed() > Duration::from_millis(300) {
-                dashboard.show();
-                if let Some(snap) = &last {
-                    dashboard.push(snap);
+        // Process all tray events.
+        while let Ok(tray_event) = tray_rx.try_recv() {
+            match tray_event {
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } => {
+                    pending_left_click = Some(Instant::now());
+                }
+                TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                } => {
+                    pending_left_click = None;
+                    if last_action.elapsed() > Duration::from_millis(300) {
+                        if dashboard.is_visible() {
+                            dashboard.hide();
+                        } else {
+                            dashboard.show();
+                            if let Some(snap) = &last {
+                                dashboard.push(snap);
+                            }
+                        }
+                        last_action = Instant::now();
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Check single click timer.
+        if let Some(click_time) = pending_left_click {
+            if click_time.elapsed() >= Duration::from_millis(250) {
+                pending_left_click = None;
+                if last_action.elapsed() > Duration::from_millis(300) {
+                    unsafe {
+                        let hwnd = dashboard.hwnd();
+                        let _ = menu_for_manual_show.show_context_menu_for_hwnd(hwnd, None);
+                    }
+                    last_action = Instant::now();
                 }
             }
         }
@@ -157,17 +231,27 @@ async fn main() {
                 if let Some(snap) = &last {
                     dashboard.push(snap);
                 }
+                last_action = Instant::now();
             }
         }
+
+        // Keep the ticker cadence in sync with popover visibility (fast when
+        // open, slow when hidden).
+        dashboard_open.store(dashboard.is_visible(), Ordering::Relaxed);
     });
 }
 
-/// Run a refresh on a background thread and deliver the snapshot to the UI.
+/// Run a refresh on a background thread and deliver the snapshot to the UI. If a
+/// refresh (or token/theme update) already holds the lock, this tick is skipped
+/// so fast polling never piles up.
 fn spawn_refresh(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>) {
     let monitor = Arc::clone(monitor);
     let proxy = proxy.clone();
     std::thread::spawn(move || {
-        let snapshot = monitor.lock().unwrap().refresh();
+        let snapshot = match monitor.try_lock() {
+            Ok(mut guard) => guard.refresh(),
+            Err(_) => return,
+        };
         let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
     });
 }

@@ -12,7 +12,9 @@ const STATUS_LABEL = {
   depleted: "EMPTY",
 };
 
-function ipc(msg) {
+// NOTE: wry reserves `window.ipc` for its bridge, so we must use a
+// different name to avoid "Identifier 'ipc' has already been declared".
+function sendIpc(msg) {
   try {
     window.ipc.postMessage(JSON.stringify(msg));
   } catch (e) {
@@ -196,17 +198,20 @@ setInterval(() => {
 document.getElementById("btn-refresh").onclick = () => {
   const b = document.getElementById("btn-refresh");
   b.innerHTML = '<span class="spin">↻</span> A sincronizar…';
-  ipc({ type: "refresh" });
+  sendIpc({ type: "refresh" });
 };
-document.getElementById("btn-close").onclick = () => ipc({ type: "close" });
+
+document.getElementById("btn-close").onclick = () => {
+  sendIpc({ type: "close" });
+};
+
 document.getElementById("btn-theme").onclick = () => {
   const cur = document.documentElement.getAttribute("data-theme");
   const next = cur === "dark" ? "light" : "dark";
   applyTheme(next);
-  ipc({ type: "setTheme", theme: next });
+  sendIpc({ type: "setTheme", theme: next });
 };
 
-// ---- Settings ----
 const settings = document.getElementById("settings");
 document.getElementById("btn-settings").onclick = () => {
   document.getElementById("copilot-token").value = "";
@@ -217,13 +222,13 @@ document.getElementById("btn-settings-close").onclick = () =>
 document.querySelectorAll("#theme-seg .tab").forEach((el) => {
   el.onclick = () => {
     applyTheme(el.dataset.themeValue);
-    ipc({ type: "setTheme", theme: el.dataset.themeValue });
+    sendIpc({ type: "setTheme", theme: el.dataset.themeValue });
   };
 });
 document.getElementById("btn-save").onclick = () => {
   const token = document.getElementById("copilot-token").value.trim();
-  if (token) ipc({ type: "setCopilotToken", token: token });
-  ipc({ type: "refresh" });
+  if (token) sendIpc({ type: "setCopilotToken", token: token });
+  sendIpc({ type: "refresh" });
   settings.classList.remove("open");
 };
 
@@ -236,5 +241,24 @@ if (window.matchMedia) {
     });
 }
 
+// Close on click-away: a window-level blur means another app/window was
+// activated. Intra-page focus moves (tabs, the settings input) don't fire it.
+window.addEventListener("blur", function () {
+  sendIpc({ type: "blur" });
+});
+
+// Close on Escape key press
+window.addEventListener("keydown", function (e) {
+  if (e.key === "Escape") {
+    sendIpc({ type: "close" });
+  }
+});
+
+// Take focus so the blur signal is meaningful once shown.
+window.addEventListener("focus", function () {});
+try {
+  window.focus();
+} catch (e) {}
+
 // signal readiness so Rust can push the first snapshot
-ipc({ type: "ready" });
+sendIpc({ type: "ready" });

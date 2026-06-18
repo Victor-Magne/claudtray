@@ -2,26 +2,20 @@ use crate::model::{ProviderSnapshot, Snapshot};
 use crate::providers;
 use crate::state::AppState;
 use chrono::Local;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
-/// Default budget floors per window key. These only matter before the user has
-/// built up real usage history: they give the gauge sensible headroom on a
-/// cold start (so a fresh install doesn't read 0%/100%-used). Once observed
-/// usage exceeds a floor, the historical peak takes over and the gauge
-/// self-calibrates to the real limit.
-fn budget_floor(window_key: &str) -> u64 {
-    match window_key {
-        "session" => 2_000_000,  // ~2M tokens in a 5h window
-        "weekly" => 10_000_000,  // ~10M tokens in 7 days
-        "opus" => 5_000_000,     // ~5M Opus tokens in 7 days
-        _ => 2_000_000,
-    }
-}
+/// How long a provider's last successful snapshot is reused after a failure,
+/// so fast polling doesn't flicker to "unavailable" on a transient blip.
+const STALE_TTL: Duration = Duration::from_secs(30);
 
-/// Single source of truth: runs every provider, applies the auto-detected
-/// budgets and produces a [`Snapshot`] for the dashboard + tray icon.
+/// Single source of truth: runs every provider and produces a [`Snapshot`] for
+/// the dashboard + tray icon.
 pub struct QuotaMonitor {
     pub state: AppState,
     pub last: Option<Snapshot>,
+    /// Last successful snapshot per provider id, with the time it was taken.
+    last_good: HashMap<String, (ProviderSnapshot, Instant)>,
 }
 
 impl QuotaMonitor {
@@ -29,42 +23,64 @@ impl QuotaMonitor {
         Self {
             state: AppState::load(),
             last: None,
+            last_good: HashMap::new(),
         }
     }
 
-    /// Collect from all providers, derive budgets/percentages, persist the
-    /// observed maxima and theme, and return the fresh snapshot.
+    /// Collect from all providers in parallel, ride out transient failures, cache
+    /// the snapshot, and return it.
     pub fn refresh(&mut self) -> Snapshot {
-        let mut snaps: Vec<ProviderSnapshot> = Vec::new();
+        let state = self.state.clone();
 
-        for provider in providers::all() {
-            let mut snap = provider.collect(&self.state);
-            for w in &mut snap.windows {
-                // Percentage-based providers already carry their status.
-                if !w.auto {
-                    continue;
-                }
-                let key = format!("{}:{}", snap.id, w.key);
-                // Historical peak BEFORE folding in the current value, so a new
-                // all-time-high reads near 0% rather than pinning at the peak.
-                let historical_peak = *self.state.observed_max.get(&key).unwrap_or(&0);
-                let budget = historical_peak.max(budget_floor(&w.key));
-                w.finalize(budget);
-                // Now record the current value for future refreshes.
-                if w.used_tokens > 0 {
-                    self.state.observe(&key, w.used_tokens);
-                }
+        // Spawn collection for each provider in parallel to avoid blocking sequentially.
+        let handles: Vec<_> = providers::all()
+            .into_iter()
+            .map(|provider| {
+                let state = state.clone();
+                std::thread::spawn(move || {
+                    let snap = provider.collect(&state);
+                    (provider.id().to_string(), snap)
+                })
+            })
+            .collect();
+
+        // Join threads and collect raw snapshots.
+        let mut raw_results: HashMap<String, ProviderSnapshot> = HashMap::new();
+        for handle in handles {
+            if let Ok((id, snap)) = handle.join() {
+                raw_results.insert(id, snap);
             }
-            snaps.push(snap);
         }
 
-        self.state.save();
+        let mut snaps: Vec<ProviderSnapshot> = Vec::new();
+
+        // Reconstruct display order. A provider that just failed keeps showing
+        // its last good value for STALE_TTL so fast polling doesn't flicker.
+        for provider in providers::all() {
+            let id = provider.id();
+            let fresh = raw_results.remove(id).unwrap_or_else(|| {
+                ProviderSnapshot::unavailable(id, provider.name(), "Erro na recolha")
+            });
+            let snap = if fresh.available {
+                self.last_good
+                    .insert(id.to_string(), (fresh.clone(), Instant::now()));
+                fresh
+            } else {
+                match self.last_good.get(id) {
+                    Some((good, ts)) if ts.elapsed() < STALE_TTL => good.clone(),
+                    _ => fresh,
+                }
+            };
+            snaps.push(snap);
+        }
 
         let snapshot = Snapshot {
             updated_at: Local::now().to_rfc3339(),
             theme: self.state.theme.clone(),
             providers: snaps,
         };
+        self.state.last_snapshot = Some(snapshot.clone());
+        self.state.save();
         self.last = Some(snapshot.clone());
         snapshot
     }
