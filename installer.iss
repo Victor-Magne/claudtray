@@ -14,7 +14,7 @@ AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 AppComments=Monitor de uso de assistentes de IA (Claude, Codex, Antigravity, Copilot)
 
-; Install per-user — no admin required
+; Per-user install — no admin required, works on standard accounts
 DefaultDirName={localappdata}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
@@ -22,8 +22,6 @@ PrivilegesRequiredOverridesAllowed=commandline
 
 DisableProgramGroupPage=yes
 DisableDirPage=no
-
-; Modern Inno Setup wizard
 WizardStyle=modern
 
 ; Output
@@ -37,46 +35,47 @@ SetupIconFile=assets\claudebar.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 
-; WebView2 is required (comes with Windows 11, usually already present)
-; If missing, guide the user to install it.
 [Messages]
 WelcomeLabel2=Bem-vindo ao instalador do [name]!%n%nEste programa monitoriza o uso de assistentes de IA (Claude Code, Codex, Antigravity, GitHub Copilot) em tempo real na barra de tarefas do Windows.%n%nClica em Seguinte para continuar.
 FinishedLabel=A instalação do [name] está concluída.%n%nPodes iniciá-lo a qualquer momento pelo Menu Iniciar ou procurando por "ClaudeBar".
 
 [Files]
-; Main executable (with embedded icon and version info)
+; App executable (CRT statically linked — no MSVC Redist needed)
 Source: "target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
-; App icon (used by shortcuts)
+; App icon
 Source: "assets\claudebar.ico"; DestDir: "{app}"; Flags: ignoreversion
 
-[Icons]
-; Start Menu shortcut (searchable by Windows Search)
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\claudebar.ico"; Comment: "Monitor de uso de IA em tempo real"
+; WebView2 Evergreen Bootstrapper — extracted to temp only when needed
+; (~1.6 MB, downloads from Microsoft if WebView2 is absent on the machine)
+Source: "assets\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; \
+  Flags: dontcopy deleteafterinstall
 
-; Uninstall shortcut in Start Menu
+[Icons]
+; Start Menu — searchable via Windows Search
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
+  IconFilename: "{app}\claudebar.ico"; \
+  Comment: "Monitor de uso de IA em tempo real"
 Name: "{group}\Desinstalar {#MyAppName}"; Filename: "{uninstallexe}"
 
 [Registry]
-; "Iniciar com o Windows" — written only when the user ticks the checkbox
+; Startup-with-Windows — only when the user ticks the checkbox
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
   ValueType: string; ValueName: "{#MyAppName}"; \
   ValueData: """{app}\{#MyAppExeName}"""; \
   Check: WantsStartup
 
 [Tasks]
-; Optional startup-with-Windows task shown on the last wizard page
 Name: "startup"; Description: "Iniciar {#MyAppName} automaticamente com o Windows"; \
   GroupDescription: "Opções adicionais:"; Flags: unchecked
 
 [Code]
-// Helper: returns True if the startup task is selected
 function WantsStartup: Boolean;
 begin
   Result := WizardIsTaskSelected('startup');
 end;
 
-// If user un-ticks startup after a previous install, remove the Run key
+// Remove Run key on uninstall
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then
@@ -85,39 +84,51 @@ begin
       '{#MyAppName}');
 end;
 
-// Check for WebView2 runtime (required by the app). Warn but don't block.
-function InitializeSetup(): Boolean;
+// Check WebView2; if absent, silently install the bundled bootstrapper.
+// The bootstrapper is tiny (~1.6 MB) and downloads the runtime from
+// Microsoft. On Windows 11 WebView2 is always present so this never runs.
+function WebView2Present: Boolean;
 var
   Ver: String;
 begin
-  Result := True;
-  if not RegQueryStringValue(HKCU,
+  Result :=
+    RegQueryStringValue(HKCU,
       'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
-      'pv', Ver) then
-  begin
-    if not RegQueryStringValue(HKLM,
-        'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
-        'pv', Ver) then
-    begin
-      if MsgBox(
-        'O WebView2 Runtime não foi detetado.' + #13#10 +
-        'A ClaudeBar precisa dele para mostrar o painel.' + #13#10#13#10 +
-        'No Windows 11 já vem incluído. Se a app não abrir o painel após a instalação,' + #13#10 +
-        'instala o WebView2 em: https://aka.ms/webview2' + #13#10#13#10 +
-        'Queres continuar mesmo assim?',
-        mbConfirmation, MB_YESNO) = IDNO then
-        Result := False;
-    end;
-  end;
+      'pv', Ver) or
+    RegQueryStringValue(HKLM,
+      'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+      'pv', Ver) or
+    RegQueryStringValue(HKLM,
+      'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+      'pv', Ver);
+end;
+
+procedure InstallWebView2;
+var
+  SetupPath: String;
+  ResultCode: Integer;
+begin
+  ExtractTemporaryFile('MicrosoftEdgeWebview2Setup.exe');
+  SetupPath := ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe');
+  if not Exec(SetupPath, '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    MsgBox(
+      'Não foi possível instalar o WebView2 Runtime automaticamente.' + #13#10 +
+      'Instala manualmente em: https://aka.ms/webview2',
+      mbError, MB_OK);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssInstall then
+    if not WebView2Present then
+      InstallWebView2;
 end;
 
 [Run]
-; Offer to launch the app after install (runs in background, no window)
 Filename: "{app}\{#MyAppExeName}"; \
   Description: "Lançar {#MyAppName} agora"; \
   Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
-; Make sure no instance is running when uninstalling
 Filename: "taskkill"; Parameters: "/f /im {#MyAppExeName}"; \
   Flags: runhidden; RunOnceId: "KillOnUninstall"
