@@ -4,8 +4,7 @@ use tao::event_loop::{EventLoopProxy, EventLoopWindowTarget};
 use tao::platform::windows::{WindowBuilderExtWindows, WindowExtWindows};
 use tao::window::{Window, WindowBuilder};
 use window_vibrancy::apply_mica;
-use wry::{WebView, WebViewBuilder};
-// Duplicate import removed
+use wry::{WebContext, WebView, WebViewBuilder};
 use serde_json;
 
 
@@ -66,8 +65,9 @@ fn parse_ipc(body: &str) -> Option<IpcMessage> {
 /// backdrop hosting a WebView2 webview, anchored to the bottom-right above the
 /// taskbar like a native Win11 flyout.
 pub struct Dashboard {
-    // Field order matters: the webview must drop before the window it lives in.
+    // Field order matters: webview → context → window (reverse drop order).
     webview: WebView,
+    _context: WebContext,
     window: Window,
     visible: bool,
 }
@@ -93,15 +93,18 @@ impl Dashboard {
         // Authentic Win11 translucent backdrop.
         let _ = apply_mica(&window, Some(dark));
 
-        let webview = WebViewBuilder::new()
+        // Store WebView2 cache in %APPDATA%\CloudTray\WebView2 so the app can
+        // run from Program Files (read-only) without write-permission panics.
+        let webview_data_dir = dirs::config_dir()
+            .map(|d| d.join("CloudTray").join("WebView2"));
+        let mut context = WebContext::new(webview_data_dir);
+
+        let webview = WebViewBuilder::new_with_web_context(&mut context)
             .with_transparent(true)
             .with_html(build_html())
             .with_ipc_handler(move |req| {
                 if let Some(msg) = parse_ipc(req.body()) {
-                    println!("Received IPC: {:?}", msg);
                     let _ = proxy.send_event(UserEvent::Ipc(msg));
-                } else {
-                    println!("Failed to parse IPC: {}", req.body());
                 }
             })
             .build(&window)
@@ -109,6 +112,7 @@ impl Dashboard {
 
         Self {
             webview,
+            _context: context,
             window,
             visible: false,
         }

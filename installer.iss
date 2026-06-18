@@ -14,8 +14,9 @@ AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 AppComments=Monitor de uso de assistentes de IA (Claude, Codex, Antigravity, Copilot)
 
-; Machine-wide install in Program Files — requires admin elevation
-DefaultDirName={autopf}\{#MyAppName}
+; Machine-wide install in 64-bit Program Files — requires admin elevation
+DefaultDirName={commonpf64}\{#MyAppName}
+ArchitecturesInstallIn64BitMode=x64compatible
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=admin
 UsedUserAreasWarning=no
@@ -75,6 +76,26 @@ begin
   Result := WizardIsTaskSelected('startup');
 end;
 
+// Migrate old per-user / x86 install: silently uninstall it before setup begins.
+procedure MigrateOldInstall;
+var
+  UninstStr: String;
+  ResultCode: Integer;
+begin
+  if RegQueryStringValue(HKLM,
+      'SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\{F3A7B2C1-8D4E-4F9A-B6C2-1E5D7A3F8B9C}_is1',
+      'UninstallString', UninstStr) then begin
+    Exec(RemoveQuotes(UninstStr), '/SILENT', '', SW_HIDE,
+         ewWaitUntilTerminated, ResultCode);
+  end;
+  if RegQueryStringValue(HKCU,
+      'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{F3A7B2C1-8D4E-4F9A-B6C2-1E5D7A3F8B9C}_is1',
+      'UninstallString', UninstStr) then begin
+    Exec(RemoveQuotes(UninstStr), '/SILENT', '', SW_HIDE,
+         ewWaitUntilTerminated, ResultCode);
+  end;
+end;
+
 // Remove Run key on uninstall
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
@@ -119,9 +140,11 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if CurStep = ssInstall then
+  if CurStep = ssInstall then begin
+    MigrateOldInstall;
     if not WebView2Present then
       InstallWebView2;
+  end;
 end;
 
 [Run]
