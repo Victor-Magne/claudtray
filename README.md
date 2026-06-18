@@ -50,7 +50,7 @@ scoop install cloudtray
 
 ### Option 3 — Installer (direct download)
 
-Download `CloudTray_Setup_<version>.exe` from the [Releases page](https://github.com/Victor-Magne/claudtray/releases/actions) and run it. The installer:
+Download `CloudTray_Setup_<version>.exe` from the [Releases page](https://github.com/Victor-Magne/claudtray/releases) and run it. The installer:
 
 - Does **not** require administrator rights (installs to `%LocalAppData%\CloudTray`)
 - Optionally adds CloudTray to Windows startup
