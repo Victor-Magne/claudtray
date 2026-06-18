@@ -99,7 +99,10 @@ function renderCards() {
   const p = DATA.providers.find((x) => x.id === activeProvider);
   if (!p) return;
 
-  if (!p.available || p.windows.length === 0) {
+  const hasWindows = p.windows && p.windows.length > 0;
+  const hasModels = p.local_models && p.local_models.length > 0;
+
+  if (!p.available || (!hasWindows && !hasModels)) {
     const div = document.createElement("div");
     div.className = "empty";
     div.innerHTML =
@@ -110,11 +113,83 @@ function renderCards() {
     return;
   }
 
-  p.windows.forEach((w, i) => {
-    // OPUS (or any 3rd window) spans full width to mirror the macOS layout.
-    const wide = w.key === "opus" || p.windows.length === 1;
-    wrap.appendChild(card(w, wide));
-  });
+  if (hasWindows) {
+    p.windows.forEach((w) => {
+      const wide = w.key === "opus" || p.windows.length === 1;
+      wrap.appendChild(card(w, wide));
+    });
+  }
+
+  if (p.total_tokens != null && p.total_tokens > 0) {
+    wrap.appendChild(totalTokensCard(p.total_tokens));
+  }
+
+  if (hasModels) {
+    p.local_models.forEach((m) => wrap.appendChild(localModelCard(m)));
+  }
+}
+
+function formatTokens(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + "B";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + "K";
+  return n.toString();
+}
+
+function totalTokensCard(tokens) {
+  const el = document.createElement("div");
+  el.className = "card wide";
+
+  const top = document.createElement("div");
+  top.className = "top";
+  const lbl = document.createElement("span");
+  lbl.className = "wlabel";
+  lbl.textContent = "TOKENS GASTOS (30d)";
+  top.appendChild(lbl);
+
+  const val = document.createElement("div");
+  val.className = "pct";
+  val.style.fontSize = "26px";
+  val.textContent = formatTokens(tokens);
+
+  el.appendChild(top);
+  el.appendChild(val);
+  return el;
+}
+
+function localModelCard(m) {
+  const el = document.createElement("div");
+  el.className = "card";
+
+  const top = document.createElement("div");
+  top.className = "top";
+
+  const lbl = document.createElement("span");
+  lbl.className = "wlabel";
+  lbl.textContent = m.name.split(":")[0].toUpperCase();
+  top.appendChild(lbl);
+
+  const badge = document.createElement("span");
+  badge.className = "badge " + (m.loaded ? "s-healthy" : "s-depleted");
+  badge.textContent = m.loaded ? "A CORRER" : "PARADO";
+  top.appendChild(badge);
+
+  const paramSize = document.createElement("div");
+  paramSize.className = "pct";
+  paramSize.style.fontSize = "20px";
+  paramSize.textContent = m.parameter_size || "—";
+
+  const sub = document.createElement("div");
+  sub.className = "reset";
+  const sizeGB =
+    m.size_bytes > 0 ? (m.size_bytes / 1e9).toFixed(1) + " GB" : "";
+  const quant = m.quantization || "";
+  sub.textContent = [quant, sizeGB].filter(Boolean).join(" · ") || "—";
+
+  el.appendChild(top);
+  el.appendChild(paramSize);
+  el.appendChild(sub);
+  return el;
 }
 
 function card(w, wide) {

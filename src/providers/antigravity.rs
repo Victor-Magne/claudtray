@@ -48,6 +48,8 @@ impl Provider for AntigravityProvider {
                         available: true,
                         note: None,
                         windows,
+                        total_tokens: None,
+                        local_models: Vec::new(),
                     };
                 }
             }

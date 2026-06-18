@@ -82,6 +82,8 @@ impl CopilotProvider {
             available: true,
             note: resp.copilot_plan,
             windows: vec![window],
+            total_tokens: None,
+            local_models: Vec::new(),
         }
     }
 }

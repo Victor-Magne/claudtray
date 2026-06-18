@@ -3,6 +3,7 @@ pub mod claude;
 pub mod codex;
 pub mod copilot;
 pub mod http;
+pub mod ollama;
 
 use crate::model::ProviderSnapshot;
 use crate::state::AppState;
@@ -23,6 +24,7 @@ pub fn all() -> Vec<Box<dyn Provider + Send + Sync>> {
         Box::new(antigravity::AntigravityProvider),
         Box::new(codex::CodexProvider),
         Box::new(copilot::CopilotProvider),
+        Box::new(ollama::OllamaProvider),
     ]
 }
 

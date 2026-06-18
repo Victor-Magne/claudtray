@@ -93,6 +93,8 @@ impl ClaudeProvider {
             available: true,
             note: None,
             windows,
+            total_tokens: Some(count_tokens_from_logs()),
+            local_models: Vec::new(),
         }
     }
 }
@@ -135,6 +137,45 @@ fn load_token() -> Option<String> {
         .oauth?
         .access_token
         .filter(|t| !t.trim().is_empty())
+}
+
+/// Sum tokens from Claude Code JSONL conversation logs (last 30 days, up to 300 files).
+fn count_tokens_from_logs() -> u64 {
+    let Some(projects_dir) = dirs::home_dir().map(|h| h.join(".claude").join("projects")) else {
+        return 0;
+    };
+    if !projects_dir.exists() {
+        return 0;
+    }
+    let files = super::newest_jsonl_files(&projects_dir, 30);
+    let mut total = 0u64;
+    for path in files.iter().take(300) {
+        total += count_file_tokens(path);
+    }
+    total
+}
+
+fn count_file_tokens(path: &std::path::Path) -> u64 {
+    let Ok(content) = std::fs::read_to_string(path) else { return 0; };
+    if content.len() > 10_000_000 { return 0; } // skip files > 10 MB
+    let mut total = 0u64;
+    for line in content.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue; };
+        if let Some(tokens) = extract_usage_tokens(&v) {
+            total += tokens;
+        }
+    }
+    total
+}
+
+fn extract_usage_tokens(v: &serde_json::Value) -> Option<u64> {
+    let usage = v.get("usage")
+        .or_else(|| v.get("message").and_then(|m| m.get("usage")))?;
+    let inp = usage.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+    let out = usage.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+    let cache_c = usage.get("cache_creation_input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+    let cache_r = usage.get("cache_read_input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
+    Some(inp + out + cache_c + cache_r)
 }
 
 fn fetch_usage(token: &str) -> Option<UsageResponse> {

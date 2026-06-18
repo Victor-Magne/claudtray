@@ -12,7 +12,7 @@
 
 /* ---- Dark (default) ---- */
 html[data-theme="dark"] {
-  --app-bg: rgba(20, 22, 28, 0.55);
+  --app-bg: rgba(28, 33, 38, 0.88);
   --fg: #ffffff;
   --fg-dim: rgba(255, 255, 255, 0.55);
   --fg-faint: rgba(255, 255, 255, 0.35);
@@ -24,7 +24,7 @@ html[data-theme="dark"] {
   --btn-bg: rgba(255, 255, 255, 0.06);
   --btn-border: rgba(255, 255, 255, 0.10);
   --window-border: rgba(255, 255, 255, 0.08);
-  --overlay: rgba(20, 22, 28, 0.92);
+  --overlay: rgba(28, 33, 38, 0.96);
 }
 
 /* ---- Light ---- */

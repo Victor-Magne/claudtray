@@ -71,6 +71,17 @@ impl WindowUsage {
     }
 }
 
+/// Info about a locally installed model (e.g. from Ollama).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalModelInfo {
+    pub name: String,
+    pub size_bytes: u64,
+    /// Whether this model is currently loaded in memory (VRAM).
+    pub loaded: bool,
+    pub parameter_size: Option<String>,
+    pub quantization: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderSnapshot {
     /// Stable id, e.g. "claude".
@@ -82,6 +93,12 @@ pub struct ProviderSnapshot {
     /// Optional human hint shown when `available` is false (e.g. "Não detetado").
     pub note: Option<String>,
     pub windows: Vec<WindowUsage>,
+    /// Total tokens consumed (last 30 days), parsed from local log files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    /// Locally installed models (Ollama and similar runtimes).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub local_models: Vec<LocalModelInfo>,
 }
 
 impl ProviderSnapshot {
@@ -92,6 +109,8 @@ impl ProviderSnapshot {
             available: false,
             note: Some(note.to_string()),
             windows: Vec::new(),
+            total_tokens: None,
+            local_models: Vec::new(),
         }
     }
 }

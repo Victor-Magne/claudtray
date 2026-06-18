@@ -1,7 +1,7 @@
 use crate::model::Snapshot;
 use tao::dpi::{LogicalSize, PhysicalPosition};
 use tao::event_loop::{EventLoopProxy, EventLoopWindowTarget};
-use tao::platform::windows::{WindowBuilderExtWindows, WindowExtWindows};
+use tao::platform::windows::WindowBuilderExtWindows;
 use tao::window::{Window, WindowBuilder};
 use window_vibrancy::apply_mica;
 use wry::{WebView, WebViewBuilder};
@@ -125,10 +125,6 @@ impl Dashboard {
 
     pub fn is_visible(&self) -> bool {
         self.visible
-    }
-
-    pub fn hwnd(&self) -> isize {
-        self.window.hwnd() as isize
     }
 
     pub fn show(&mut self) {

@@ -69,6 +69,8 @@ impl Provider for CodexProvider {
                         available: true,
                         note: None,
                         windows,
+                        total_tokens: None,
+                        local_models: Vec::new(),
                     };
                 }
             }

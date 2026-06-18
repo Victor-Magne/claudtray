@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tao::event::Event;
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, ContextMenu};
+use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use window::{Dashboard, IpcMessage, UserEvent};
 
@@ -55,8 +55,6 @@ async fn main() {
     let refresh_id = refresh_item.id().clone();
     let exit_id = exit_item.id().clone();
 
-    let menu_for_manual_show = tray_menu.clone();
-
     let initial_status = last.as_ref().map(|s| s.worst_status()).unwrap_or(Status::Healthy);
     let initial_tooltip = last.as_ref().map(|s| tooltip(s)).unwrap_or_else(|| "CloudTray — a carregar…".to_string());
 
@@ -93,16 +91,11 @@ async fn main() {
 
     let menu_rx = MenuEvent::receiver();
     let tray_rx = TrayIconEvent::receiver();
-    // Debounces tray clicks and guards the post-show focus settling.
+    // Guards the post-show focus settling to prevent immediate blur-close.
     let mut last_action = Instant::now() - Duration::from_secs(10);
-    let mut pending_left_click: Option<Instant> = None;
 
     event_loop.run(move |event, _, control_flow| {
-        if pending_left_click.is_some() {
-            *control_flow = ControlFlow::Poll;
-        } else {
-            *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(150));
-        }
+        *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(150));
 
         match event {
             Event::UserEvent(UserEvent::Tick) => spawn_refresh(&monitor, &proxy),
@@ -134,10 +127,11 @@ async fn main() {
                     // Click-away: the webview lost focus to another window. We
                     // route this through the webview (not tao's Focused event)
                     // because the WebView2 child window holds the real focus.
-                    // The grace period ignores the focus settling right after a
-                    // show.
+                    // The 1500ms grace period ignores focus settling right after show
+                    // and prevents the window closing when the user moves the mouse
+                    // away from the tray area immediately after clicking.
                     if dashboard.is_visible()
-                        && last_action.elapsed() > Duration::from_millis(600)
+                        && last_action.elapsed() > Duration::from_millis(1500)
                     {
                         dashboard.hide();
                         last_action = Instant::now();
@@ -149,7 +143,7 @@ async fn main() {
                 ..
             } => {
                 if dashboard.is_visible()
-                    && last_action.elapsed() > Duration::from_millis(600)
+                    && last_action.elapsed() > Duration::from_millis(1500)
                 {
                     dashboard.hide();
                     last_action = Instant::now();
@@ -174,45 +168,24 @@ async fn main() {
             _ => {}
         }
 
-        // Process all tray events.
+        // Process all tray events. Left click toggles the dashboard directly;
+        // right-click is handled automatically by the OS via `with_menu`.
         while let Ok(tray_event) = tray_rx.try_recv() {
-            match tray_event {
-                TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                } => {
-                    pending_left_click = Some(Instant::now());
-                }
-                TrayIconEvent::DoubleClick {
-                    button: MouseButton::Left,
-                    ..
-                } => {
-                    pending_left_click = None;
-                    if last_action.elapsed() > Duration::from_millis(300) {
-                        if dashboard.is_visible() {
-                            dashboard.hide();
-                        } else {
-                            dashboard.show();
-                            if let Some(snap) = &last {
-                                dashboard.push(snap);
-                            }
-                        }
-                        last_action = Instant::now();
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Check single click timer.
-        if let Some(click_time) = pending_left_click {
-            if click_time.elapsed() >= Duration::from_millis(250) {
-                pending_left_click = None;
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = tray_event
+            {
+                // 300ms debounce prevents double-click from toggling twice.
                 if last_action.elapsed() > Duration::from_millis(300) {
-                    unsafe {
-                        let hwnd = dashboard.hwnd();
-                        let _ = menu_for_manual_show.show_context_menu_for_hwnd(hwnd, None);
+                    if dashboard.is_visible() {
+                        dashboard.hide();
+                    } else {
+                        dashboard.show();
+                        if let Some(snap) = &last {
+                            dashboard.push(snap);
+                        }
                     }
                     last_action = Instant::now();
                 }
