@@ -14,11 +14,10 @@ AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 AppComments=Monitor de uso de assistentes de IA (Claude, Codex, Antigravity, Copilot)
 
-; Per-user install — no admin required, works on standard accounts
-DefaultDirName={localappdata}\{#MyAppName}
+; Machine-wide install in Program Files — requires admin elevation
+DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
-PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=commandline
+PrivilegesRequired=admin
 
 DisableProgramGroupPage=yes
 DisableDirPage=no

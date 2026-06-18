@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tao::event::Event;
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, ContextMenu};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use window::{Dashboard, IpcMessage, UserEvent};
 
@@ -55,6 +55,11 @@ async fn main() {
     let refresh_id = refresh_item.id().clone();
     let exit_id = exit_item.id().clone();
 
+    // Keep the menu separate so we control WHEN it appears (right-click only).
+    // NOT passed to with_menu() — that would cause tray-icon to auto-show it on
+    // left-click on Windows, conflicting with our toggle behaviour.
+    let context_menu = tray_menu;
+
     let initial_status = last.as_ref().map(|s| s.worst_status()).unwrap_or(Status::Healthy);
     let initial_tooltip = last.as_ref().map(|s| tooltip(s)).unwrap_or_else(|| "CloudTray — a carregar…".to_string());
 
@@ -62,7 +67,6 @@ async fn main() {
         .expect("ícone RGBA inválido");
     let mut tray: Option<TrayIcon> = Some(
         TrayIconBuilder::new()
-            .with_menu(Box::new(tray_menu))
             .with_tooltip(initial_tooltip)
             .with_icon(icon)
             .build()
@@ -168,27 +172,39 @@ async fn main() {
             _ => {}
         }
 
-        // Process all tray events. Left click toggles the dashboard directly;
-        // right-click is handled automatically by the OS via `with_menu`.
+        // Process all tray events.
+        // Left click  → toggle dashboard (300ms debounce against double-click).
+        // Right click → show context menu manually on the dashboard window.
         while let Ok(tray_event) = tray_rx.try_recv() {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = tray_event
-            {
-                // 300ms debounce prevents double-click from toggling twice.
-                if last_action.elapsed() > Duration::from_millis(300) {
-                    if dashboard.is_visible() {
-                        dashboard.hide();
-                    } else {
-                        dashboard.show();
-                        if let Some(snap) = &last {
-                            dashboard.push(snap);
+            match tray_event {
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } => {
+                    if last_action.elapsed() > Duration::from_millis(300) {
+                        if dashboard.is_visible() {
+                            dashboard.hide();
+                        } else {
+                            dashboard.show();
+                            if let Some(snap) = &last {
+                                dashboard.push(snap);
+                            }
                         }
+                        last_action = Instant::now();
                     }
-                    last_action = Instant::now();
                 }
+                TrayIconEvent::Click {
+                    button: MouseButton::Right,
+                    button_state: MouseButtonState::Up,
+                    ..
+                } => {
+                    unsafe {
+                        let _ = context_menu
+                            .show_context_menu_for_hwnd(dashboard.hwnd(), None);
+                    }
+                }
+                _ => {}
             }
         }
 
