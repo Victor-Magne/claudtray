@@ -18,6 +18,7 @@ AppComments=Monitor de uso de assistentes de IA (Claude, Codex, Antigravity, Cop
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=admin
+UsedUserAreasWarning=no
 
 DisableProgramGroupPage=yes
 DisableDirPage=no
@@ -40,7 +41,7 @@ FinishedLabel=A instalação do [name] está concluída.%n%nPodes iniciá-lo a q
 
 [Files]
 ; App executable (CRT statically linked — no MSVC Redist needed)
-Source: "target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "target\x86_64-pc-windows-msvc\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 ; App icon
 Source: "assets\cloudtray.ico"; DestDir: "{app}"; Flags: ignoreversion
