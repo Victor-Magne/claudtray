@@ -1,5 +1,5 @@
 #define MyAppName      "ClaudTray"
-#define MyAppVersion   "1.1.1"
+#define MyAppVersion   "1.1.2"
 #define MyAppPublisher "Victor Magne"
 #define MyAppExeName   "claudtray.exe"
 #define MyAppURL       "https://github.com/Victor-Magne/claudtray"

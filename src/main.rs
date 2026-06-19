@@ -66,7 +66,12 @@ async fn main() {
     let initial_tooltip = last.as_ref().map(|s| tooltip(s)).unwrap_or_else(|| "ClaudTray — a carregar…".to_string());
     // Alert tracking: fire a notification when any window transitions into Critical/Depleted.
     let mut prev_status = initial_status;
-    let mut last_alert = Instant::now() - Duration::from_secs(3600);
+    // Initialise "in the past" so the first alert can fire immediately.
+    // checked_sub avoids an overflow panic on freshly-booted machines where the
+    // monotonic clock (uptime) is still under an hour.
+    let mut last_alert = Instant::now()
+        .checked_sub(Duration::from_secs(3600))
+        .unwrap_or_else(Instant::now);
 
     let icon = Icon::from_rgba(generate_dynamic_icon(initial_status), 64, 64)
         .expect("ícone RGBA inválido");
@@ -101,7 +106,9 @@ async fn main() {
     let menu_rx = MenuEvent::receiver();
     let tray_rx = TrayIconEvent::receiver();
     // Guards the post-show focus settling to prevent immediate blur-close.
-    let mut last_action = Instant::now() - Duration::from_secs(10);
+    let mut last_action = Instant::now()
+        .checked_sub(Duration::from_secs(10))
+        .unwrap_or_else(Instant::now);
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(150));
