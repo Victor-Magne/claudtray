@@ -4,7 +4,7 @@
   "homepage": "https://github.com/Victor-Magne/claudtray",
   "license": "MIT",
   "url": "https://github.com/Victor-Magne/claudtray/releases/download/v1.1.1/ClaudTray-1.1.1.exe#/claudtray.exe",
-  "hash": "sha256:<SHA256_PENDING_v1.1.1_RELEASE>",
+  "hash": "sha256:6b4d7de4ce724be2e9c6e01f3247bacbdb666a30d3b9c2f6283a6fa5476cdfd0",
   "bin": "claudtray.exe",
   "shortcuts": [
     ["claudtray.exe", "ClaudTray"]
