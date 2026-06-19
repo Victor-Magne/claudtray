@@ -97,7 +97,7 @@ fn fetch(token: &str) -> Option<UserResp> {
             .get("https://api.github.com/copilot_internal/user")
             .header("Authorization", format!("Bearer {token}"))
             .header("Accept", "application/json")
-            .header("User-Agent", "CloudTray")
+            .header("User-Agent", "ClaudTray")
             .call()
             .ok()?;
         if resp.status().as_u16() != 200 {

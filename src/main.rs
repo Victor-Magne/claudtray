@@ -30,11 +30,11 @@ async fn main() {
 
     let monitor: SharedMonitor = Arc::new(Mutex::new(QuotaMonitor::new()));
 
-    // Debug helper: `CLOUDTRAY_DUMP=1 cloudtray` writes one snapshot to
-    // %TEMP%/cloudtray_snapshot.json and exits (no UI).
-    if std::env::var("CLOUDTRAY_DUMP").is_ok() {
+    // Debug helper: `CLAUDTRAY_DUMP=1 claudtray` writes one snapshot to
+    // %TEMP%/claudtray_snapshot.json and exits (no UI).
+    if std::env::var("CLAUDTRAY_DUMP").is_ok() {
         let snap = monitor.lock().unwrap().refresh();
-        let path = std::env::temp_dir().join("cloudtray_snapshot.json");
+        let path = std::env::temp_dir().join("claudtray_snapshot.json");
         let _ = std::fs::write(&path, serde_json::to_string_pretty(&snap).unwrap_or_default());
         return;
     }
@@ -63,7 +63,7 @@ async fn main() {
     let context_menu = tray_menu;
 
     let initial_status = last.as_ref().map(|s| s.worst_status()).unwrap_or(Status::Healthy);
-    let initial_tooltip = last.as_ref().map(|s| tooltip(s)).unwrap_or_else(|| "CloudTray — a carregar…".to_string());
+    let initial_tooltip = last.as_ref().map(|s| tooltip(s)).unwrap_or_else(|| "ClaudTray — a carregar…".to_string());
     // Alert tracking: fire a notification when any window transitions into Critical/Depleted.
     let mut prev_status = initial_status;
     let mut last_alert = Instant::now() - Duration::from_secs(3600);
@@ -379,9 +379,9 @@ fn alert_text(snap: &Snapshot) -> (String, String) {
         }
     }
     let title = match worst {
-        Status::Critical => "CloudTray — Quota Crítica".to_string(),
-        Status::Depleted => "CloudTray — Quota Esgotada".to_string(),
-        _ => "CloudTray — Alerta".to_string(),
+        Status::Critical => "ClaudTray — Quota Crítica".to_string(),
+        Status::Depleted => "ClaudTray — Quota Esgotada".to_string(),
+        _ => "ClaudTray — Alerta".to_string(),
     };
     let body = if pct == 0 {
         format!("{provider} {label}: esgotado")
@@ -405,8 +405,8 @@ fn tooltip(snap: &Snapshot) -> String {
                 .map(|w| w.remaining_pct)
         };
         if let (Some(s), Some(w)) = (pct("session"), pct("weekly")) {
-            return format!("CloudTray — SESSION {}% · WEEKLY {}%", s, w);
+            return format!("ClaudTray — SESSION {}% · WEEKLY {}%", s, w);
         }
     }
-    "CloudTray — AI Usage Monitor".to_string()
+    "ClaudTray — AI Usage Monitor".to_string()
 }

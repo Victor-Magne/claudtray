@@ -12,10 +12,10 @@ cargo build
 cargo build --release --target x86_64-pc-windows-msvc
 
 # Run directly
-.\target\release\cloudtray.exe
+.\target\release\claudtray.exe
 
-# Debug snapshot (writes JSON to %TEMP%\cloudtray_snapshot.json and exits)
-$env:CLOUDTRAY_DUMP = "1"; .\target\release\cloudtray.exe
+# Debug snapshot (writes JSON to %TEMP%\claudtray_snapshot.json and exits)
+$env:CLAUDTRAY_DUMP = "1"; .\target\release\claudtray.exe
 
 # Build installer (requires Inno Setup 6)
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
@@ -35,7 +35,7 @@ The app is a single-binary Windows system tray application with a WebView2 popov
 
 **Provider trait** (`providers/mod.rs`): Each provider implements `Provider::collect(&AppState) -> ProviderSnapshot`. Adding a provider means implementing the trait and registering it in `providers::all()`.
 
-**Persisted state** (`state.rs`): Stored at `%APPDATA%\CloudTray\state.json` — holds theme, Copilot token, and last snapshot for instant startup display.
+**Persisted state** (`state.rs`): Stored at `%APPDATA%\ClaudTray\state.json` — holds theme, Copilot token, and last snapshot for instant startup display.
 
 **Status thresholds** (`model.rs`): >50% = Healthy (green), 20–49% = Warning (yellow), 1–19% = Critical (red), 0% or no data = Depleted (gray). The tray icon shows the worst status across all active providers.
 
@@ -46,4 +46,4 @@ The app is a single-binary Windows system tray application with a WebView2 popov
 - The dashboard is positioned bottom-right above the taskbar (`window.rs:position_bottom_right`). The 48px taskbar height is a fixed approximation.
 - Single-click on the tray icon shows the context menu; double-click toggles the dashboard popover.
 - Releases are triggered by pushing a `v*` tag; the CI workflow patches the version in `installer.iss` before building.
-- After each release, update `packaging/winget/` and `packaging/scoop/cloudtray.json` with the new version and SHA256 printed in the release notes.
+- After each release, update `packaging/winget/` and `packaging/scoop/claudtray.json` with the new version and SHA256 printed in the release notes.

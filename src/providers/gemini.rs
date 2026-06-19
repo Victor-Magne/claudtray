@@ -67,7 +67,7 @@ fn fetch(key: &str) -> Option<(usize, usize)> {
     super::http::with_retry(3, 1, || {
         let mut resp = agent(false)
             .get(&url_clone)
-            .header("User-Agent", "CloudTray")
+            .header("User-Agent", "ClaudTray")
             .call()
             .ok()?;
         if resp.status().as_u16() != 200 {

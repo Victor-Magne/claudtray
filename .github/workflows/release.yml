@@ -54,7 +54,36 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # Rename to include version so each release has a unique asset name
           $v = "${{ steps.ver.outputs.version }}"
-          Rename-Item installer_output\CloudTray.exe "CloudTray-$v.exe"
+          Rename-Item installer_output\ClaudTray.exe "ClaudTray-$v.exe"
+
+      # ── Code signing (SignPath) ────────────────────────────────────────────
+      # Only runs when the repo variable SIGNPATH_ENABLED == 'true'. Configure
+      # once SignPath approves the project:
+      #   Secret:    SIGNPATH_API_TOKEN
+      #   Variables: SIGNPATH_ENABLED=true, SIGNPATH_ORGANIZATION_ID,
+      #              SIGNPATH_PROJECT_SLUG, SIGNPATH_SIGNING_POLICY_SLUG
+      # The signed installer is written back over the unsigned one so the rest
+      # of the workflow (SHA256 + release) operates on the signed file.
+      - name: Upload unsigned installer (for signing)
+        id: unsigned
+        if: vars.SIGNPATH_ENABLED == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-installer
+          path: installer_output/*.exe
+
+      - name: Sign installer with SignPath
+        if: vars.SIGNPATH_ENABLED == 'true'
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: installer_output
+      # ───────────────────────────────────────────────────────────────────────
 
       - name: Compute SHA256
         id: sha256
@@ -75,13 +104,13 @@ jobs:
 
             **winget**
             ```powershell
-            winget install VictorMagne.CloudTray
+            winget install VictorMagne.ClaudTray
             ```
 
             **Scoop**
             ```powershell
             scoop bucket add victor-magne https://github.com/Victor-Magne/scoop-bucket
-            scoop install cloudtray
+            scoop install claudtray
             ```
 
             **Direct installer** — download `${{ steps.sha256.outputs.filename }}` below.

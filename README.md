@@ -1,4 +1,4 @@
-# CloudTray
+# ClaudTray
 
 > Windows port of [ClaudeBar](https://github.com/tddworks/ClaudeBar) — a system tray app that monitors your AI assistant usage quotas in real time.
 
@@ -6,7 +6,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows%2010%2B-blue)](https://github.com/Victor-Magne/claudtray/releases/latest)
 
-CloudTray lives in the Windows system tray and gives you an at-a-glance coloured indicator of your remaining quota for Claude Code and other AI tools — no browser, no manual checking.
+ClaudTray lives in the Windows system tray and gives you an at-a-glance coloured indicator of your remaining quota for Claude Code and other AI tools — no browser, no manual checking.
 
 ---
 
@@ -36,7 +36,7 @@ CloudTray lives in the Windows system tray and gives you an at-a-glance coloured
 ### Option 1 — winget (Windows Package Manager)
 
 ```powershell
-winget install VictorMagne.CloudTray
+winget install VictorMagne.ClaudTray
 ```
 
 > The package is submitted to the [winget-pkgs](https://github.com/microsoft/winget-pkgs) community repository. Approval may take a few days after each release.
@@ -45,15 +45,15 @@ winget install VictorMagne.CloudTray
 
 ```powershell
 scoop bucket add victor-magne https://github.com/Victor-Magne/scoop-bucket
-scoop install cloudtray
+scoop install claudtray
 ```
 
 ### Option 3 — Installer (direct download)
 
-Download `CloudTray_Setup_<version>.exe` from the [Releases page](https://github.com/Victor-Magne/claudtray/releases) and run it. The installer:
+Download `ClaudTray_Setup_<version>.exe` from the [Releases page](https://github.com/Victor-Magne/claudtray/releases) and run it. The installer:
 
-- Does **not** require administrator rights (installs to `%LocalAppData%\CloudTray`)
-- Optionally adds CloudTray to Windows startup
+- Does **not** require administrator rights (installs to `%LocalAppData%\ClaudTray`)
+- Optionally adds ClaudTray to Windows startup
 - Automatically installs the WebView2 Runtime if it is missing (Windows 10 only — Windows 11 ships with it)
 
 ### Option 4 — Build from source
@@ -66,7 +66,7 @@ See [Building from source](#building-from-source) below.
 
 ### Claude usage
 
-CloudTray reads the OAuth access token stored by Claude Code at:
+ClaudTray reads the OAuth access token stored by Claude Code at:
 
 ```
 %USERPROFILE%\.claude\.credentials.json
@@ -82,7 +82,7 @@ $env:CLAUDE_CODE_OAUTH_TOKEN = "sk-ant-..."
 
 ### Other providers
 
-Copilot, Codex, and Antigravity usage is read from local rate-limit snapshot files that each tool writes to disk. CloudTray inspects running processes and known file paths to find active sessions.
+Copilot, Codex, and Antigravity usage is read from local rate-limit snapshot files that each tool writes to disk. ClaudTray inspects running processes and known file paths to find active sessions.
 
 ### Tray icon colours
 
@@ -108,26 +108,26 @@ The icon shows the **worst** status across all active providers.
 ### Steps
 
 ```powershell
-git clone https://github.com/Victor-Magne/cloudtray.git
-cd cloudtray
+git clone https://github.com/Victor-Magne/claudtray.git
+cd claudtray
 
 # Build the release binary (static CRT, no MSVC Redist needed)
 cargo build --release
 
 # Run directly
-.\target\release\cloudtray.exe
+.\target\release\claudtray.exe
 
 # Build the installer (requires Inno Setup 6)
 & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
-# Output: installer_output\CloudTray_Setup_<version>.exe
+# Output: installer_output\ClaudTray_Setup_<version>.exe
 ```
 
 ### Debug helper
 
-Set `CLOUDTRAY_DUMP=1` to write a JSON snapshot to `%TEMP%\cloudtray_snapshot.json` and exit without showing any UI — handy for checking what the app sees:
+Set `CLAUDTRAY_DUMP=1` to write a JSON snapshot to `%TEMP%\claudtray_snapshot.json` and exit without showing any UI — handy for checking what the app sees:
 
 ```powershell
-$env:CLOUDTRAY_DUMP = "1"; .\target\release\cloudtray.exe
+$env:CLAUDTRAY_DUMP = "1"; .\target\release\claudtray.exe
 ```
 
 ---
@@ -150,7 +150,7 @@ src/
     antigravity.rs — Antigravity local snapshots
     http.rs        — Shared HTTP agent (ureq)
 assets/
-  cloudtray.ico
+  claudtray.ico
   MicrosoftEdgeWebview2Setup.exe   — WebView2 bootstrapper (~1.6 MB)
 installer.iss      — Inno Setup script
 packaging/
@@ -164,8 +164,8 @@ packaging/
 
 After each release, update the version and SHA256 in:
 
-- `packaging/winget/VictorMagne.CloudTray.installer.yaml` → submit PR to [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs)
-- `packaging/scoop/cloudtray.json` → push to your Scoop bucket repo
+- `packaging/winget/VictorMagne.ClaudTray.installer.yaml` → submit PR to [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs)
+- `packaging/scoop/claudtray.json` → push to your Scoop bucket repo
 
 The SHA256 of the installer is printed in the GitHub release notes.
 
