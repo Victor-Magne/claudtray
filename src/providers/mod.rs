@@ -2,8 +2,10 @@ pub mod antigravity;
 pub mod claude;
 pub mod codex;
 pub mod copilot;
+pub mod gemini;
 pub mod http;
 pub mod ollama;
+pub mod openrouter;
 
 use crate::model::ProviderSnapshot;
 use crate::state::AppState;
@@ -24,6 +26,8 @@ pub fn all() -> Vec<Box<dyn Provider + Send + Sync>> {
         Box::new(antigravity::AntigravityProvider),
         Box::new(codex::CodexProvider),
         Box::new(copilot::CopilotProvider),
+        Box::new(openrouter::OpenRouterProvider),
+        Box::new(gemini::GeminiProvider),
         Box::new(ollama::OllamaProvider),
     ]
 }
@@ -74,9 +78,18 @@ fn collect_jsonl(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_dir() {
+        // `file_type()` reads the directory entry without following links, so a
+        // symlink reports as a symlink (not a dir/file). We deliberately never
+        // recurse into or read symlinked entries: a writable `~/.claude/...`
+        // could otherwise point the scanner at arbitrary files outside the tree.
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_symlink() {
+            continue;
+        }
+        if ft.is_dir() {
             collect_jsonl(&path, days, depth + 1, out);
-        } else if path.extension().and_then(|e| e.to_str()) == Some("jsonl")
+        } else if ft.is_file()
+            && path.extension().and_then(|e| e.to_str()) == Some("jsonl")
             && modified_within(&path, days)
         {
             if let Ok(mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) {

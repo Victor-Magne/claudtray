@@ -1,7 +1,9 @@
 #![windows_subsystem = "windows"]
 
+mod dpapi;
 mod model;
 mod monitor;
+mod notification;
 mod providers;
 mod renderer;
 mod state;
@@ -62,6 +64,9 @@ async fn main() {
 
     let initial_status = last.as_ref().map(|s| s.worst_status()).unwrap_or(Status::Healthy);
     let initial_tooltip = last.as_ref().map(|s| tooltip(s)).unwrap_or_else(|| "CloudTray — a carregar…".to_string());
+    // Alert tracking: fire a notification when any window transitions into Critical/Depleted.
+    let mut prev_status = initial_status;
+    let mut last_alert = Instant::now() - Duration::from_secs(3600);
 
     let icon = Icon::from_rgba(generate_dynamic_icon(initial_status), 64, 64)
         .expect("ícone RGBA inválido");
@@ -104,6 +109,22 @@ async fn main() {
         match event {
             Event::UserEvent(UserEvent::Tick) => spawn_refresh(&monitor, &proxy),
             Event::UserEvent(UserEvent::Snapshot(snap)) => {
+                let worst = snap.worst_status();
+                // Notify when transitioning into Critical/Depleted (5 min cooldown).
+                if worst.rank() >= Status::Critical.rank()
+                    && prev_status.rank() < Status::Critical.rank()
+                    && last_alert.elapsed() > Duration::from_secs(300)
+                {
+                    let (title, body) = alert_text(&snap);
+                    notification::show_alert(
+                        dashboard.hwnd(),
+                        dashboard.alive_flag(),
+                        &title,
+                        &body,
+                    );
+                    last_alert = Instant::now();
+                }
+                prev_status = worst;
                 update_tray(&mut tray, &snap);
                 dashboard.push(&snap);
                 last = Some(snap);
@@ -122,6 +143,21 @@ async fn main() {
                 }
                 IpcMessage::SetCopilotToken(token) => {
                     spawn_set_token(&monitor, &proxy, token);
+                }
+                IpcMessage::SyncMica(dark) => {
+                    dashboard.set_dark(dark);
+                }
+                IpcMessage::SetOpenRouterKey(key) => {
+                    spawn_set_openrouter_key(&monitor, &proxy, key);
+                }
+                IpcMessage::SetGeminiKey(key) => {
+                    spawn_set_gemini_key(&monitor, &proxy, key);
+                }
+                IpcMessage::SetHttpProxy(p) => {
+                    spawn_set_http_proxy(&monitor, p);
+                }
+                IpcMessage::OpenUrl(target) => {
+                    open_url(&target);
                 }
                 IpcMessage::Close => {
                     dashboard.hide();
@@ -277,6 +313,82 @@ fn update_tray(tray: &mut Option<TrayIcon>, snap: &Snapshot) {
         let _ = t.set_icon(Some(icon));
     }
     let _ = t.set_tooltip(Some(tooltip(snap)));
+}
+
+fn spawn_set_openrouter_key(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>, key: String) {
+    let monitor = Arc::clone(monitor);
+    let proxy = proxy.clone();
+    std::thread::spawn(move || {
+        let snapshot = {
+            let mut guard = monitor.lock().unwrap();
+            guard.set_openrouter_key(&key);
+            guard.refresh()
+        };
+        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+    });
+}
+
+fn spawn_set_gemini_key(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>, key: String) {
+    let monitor = Arc::clone(monitor);
+    let proxy = proxy.clone();
+    std::thread::spawn(move || {
+        let snapshot = {
+            let mut guard = monitor.lock().unwrap();
+            guard.set_gemini_key(&key);
+            guard.refresh()
+        };
+        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+    });
+}
+
+fn spawn_set_http_proxy(monitor: &SharedMonitor, proxy_url: String) {
+    let monitor = Arc::clone(monitor);
+    std::thread::spawn(move || {
+        monitor.lock().unwrap().set_http_proxy(&proxy_url);
+    });
+}
+
+/// Open a whitelisted URL in the default browser via cmd /c start.
+fn open_url(target: &str) {
+    let url = match target {
+        "github-tokens"  => "https://github.com/settings/tokens",
+        "openrouter-keys" => "https://openrouter.ai/keys",
+        "gemini-keys"    => "https://aistudio.google.com/app/apikey",
+        _ => return,
+    };
+    let _ = std::process::Command::new("cmd")
+        .args(["/c", "start", "", url])
+        .spawn();
+}
+
+/// Build the title + body for a critical/depleted alert notification.
+fn alert_text(snap: &Snapshot) -> (String, String) {
+    let mut worst = Status::Healthy;
+    let mut label = String::new();
+    let mut provider = String::new();
+    let mut pct = 0u32;
+    for p in &snap.providers {
+        if !p.available { continue; }
+        for w in &p.windows {
+            if w.status.rank() > worst.rank() {
+                worst = w.status;
+                label = w.label.clone();
+                provider = p.name.clone();
+                pct = w.remaining_pct;
+            }
+        }
+    }
+    let title = match worst {
+        Status::Critical => "CloudTray — Quota Crítica".to_string(),
+        Status::Depleted => "CloudTray — Quota Esgotada".to_string(),
+        _ => "CloudTray — Alerta".to_string(),
+    };
+    let body = if pct == 0 {
+        format!("{provider} {label}: esgotado")
+    } else {
+        format!("{provider} {label}: {pct}% restante")
+    };
+    (title, body)
 }
 
 fn tooltip(snap: &Snapshot) -> String {

@@ -83,24 +83,34 @@ impl CopilotProvider {
             note: resp.copilot_plan,
             windows: vec![window],
             total_tokens: None,
+            estimated_cost_usd: None,
             local_models: Vec::new(),
+            active_sessions: Vec::new(),
         }
     }
 }
 
 fn fetch(token: &str) -> Option<UserResp> {
-    let mut resp = agent(false)
-        .get("https://api.github.com/copilot_internal/user")
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Accept", "application/json")
-        .header("User-Agent", "CloudTray")
-        .call()
-        .ok()?;
-    if resp.status().as_u16() != 200 {
-        return None;
-    }
-    let text = resp.body_mut().read_to_string().ok()?;
-    serde_json::from_str::<UserResp>(&text).ok()
+    let token = token.to_string();
+    super::http::with_retry(3, 1, || {
+        let mut resp = agent(false)
+            .get("https://api.github.com/copilot_internal/user")
+            .header("Authorization", format!("Bearer {token}"))
+            .header("Accept", "application/json")
+            .header("User-Agent", "CloudTray")
+            .call()
+            .ok()?;
+        if resp.status().as_u16() != 200 {
+            return None;
+        }
+        let text = resp
+            .body_mut()
+            .with_config()
+            .limit(super::http::MAX_BODY_BYTES)
+            .read_to_string()
+            .ok()?;
+        serde_json::from_str::<UserResp>(&text).ok()
+    })
 }
 
 fn resolve_token(state: &AppState) -> Option<String> {

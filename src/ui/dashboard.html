@@ -3,8 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'nonce-__CLOUDTRAY_NONCE__'; script-src 'nonce-__CLOUDTRAY_NONCE__'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    />
     <title>CloudTray</title>
-    <style>
+    <style nonce="__CLOUDTRAY_NONCE__">
 __CLOUDTRAY_CSS__
     </style>
   </head>
@@ -41,6 +45,7 @@ __CLOUDTRAY_CSS__
     <!-- Settings overlay -->
     <div class="overlay" id="settings">
       <h2>Definições</h2>
+
       <div class="field">
         <label>Tema</label>
         <div class="seg" id="theme-seg">
@@ -49,10 +54,45 @@ __CLOUDTRAY_CSS__
           <div class="tab" data-theme-value="system">Sistema</div>
         </div>
       </div>
+
       <div class="field">
-        <label>Token GitHub (Copilot) — opcional</label>
-        <input id="copilot-token" type="password" placeholder="ghp_…" />
+        <label>
+          Token GitHub (Copilot) — opcional
+          <button class="link-btn" data-url="github-tokens">Obter ↗</button>
+        </label>
+        <div class="token-row">
+          <input id="copilot-token" type="password" placeholder="ghp_…" />
+          <button class="btn icon" id="btn-paste-token" title="Colar da área de transferência">⎘</button>
+        </div>
       </div>
+
+      <div class="field">
+        <label>
+          API Key OpenRouter — opcional
+          <button class="link-btn" data-url="openrouter-keys">Obter ↗</button>
+        </label>
+        <div class="token-row">
+          <input id="openrouter-key" type="password" placeholder="sk-or-…" />
+          <button class="btn icon paste-btn" data-target="openrouter-key" title="Colar">⎘</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>
+          API Key Gemini (Google AI Studio) — opcional
+          <button class="link-btn" data-url="gemini-keys">Obter ↗</button>
+        </label>
+        <div class="token-row">
+          <input id="gemini-key" type="password" placeholder="AIza…" />
+          <button class="btn icon paste-btn" data-target="gemini-key" title="Colar">⎘</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Proxy HTTP — opcional (ex: http://proxy:8080)</label>
+        <input id="http-proxy" type="text" placeholder="http://…" />
+      </div>
+
       <footer>
         <button class="btn" id="btn-save">Guardar</button>
         <div class="spacer"></div>
@@ -60,7 +100,7 @@ __CLOUDTRAY_CSS__
       </footer>
     </div>
 
-    <script>
+    <script nonce="__CLOUDTRAY_NONCE__">
 __CLOUDTRAY_JS__
     </script>
   </body>

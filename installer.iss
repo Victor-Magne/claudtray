@@ -1,5 +1,5 @@
 #define MyAppName      "CloudTray"
-#define MyAppVersion   "1.0.0"
+#define MyAppVersion   "1.1.0"
 #define MyAppPublisher "Victor Magne"
 #define MyAppExeName   "cloudtray.exe"
 #define MyAppURL       "https://github.com/Victor-Magne/cloudtray"
@@ -59,21 +59,88 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
   Comment: "Monitor de uso de IA em tempo real"
 Name: "{group}\Desinstalar {#MyAppName}"; Filename: "{uninstallexe}"
 
-[Registry]
-; Startup-with-Windows — only when the user ticks the checkbox
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
-  ValueType: string; ValueName: "{#MyAppName}"; \
-  ValueData: """{app}\{#MyAppExeName}"""; \
-  Check: WantsStartup
-
 [Tasks]
 Name: "startup"; Description: "Iniciar {#MyAppName} automaticamente com o Windows"; \
   GroupDescription: "Opções adicionais:"; Flags: unchecked
 
 [Code]
-function WantsStartup: Boolean;
+
+function GetInstalledVersion: String;
 begin
-  Result := WizardIsTaskSelected('startup');
+  Result := '';
+  RegQueryStringValue(HKLM,
+    'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\{F3A7B2C1-8D4E-4F9A-B6C2-1E5D7A3F8B9C}_is1',
+    'DisplayVersion', Result);
+end;
+
+// Extrai a N-ésima parte (0-based) de uma versão "X.Y.Z.W"
+function GetVersionPart(const Ver: String; Part: Integer): Integer;
+var
+  S: String;
+  I, Count: Integer;
+begin
+  S := Ver;
+  Count := 0;
+  Result := 0;
+  repeat
+    I := Pos('.', S);
+    if I > 0 then begin
+      if Count = Part then begin
+        Result := StrToIntDef(Copy(S, 1, I - 1), 0);
+        Exit;
+      end;
+      Delete(S, 1, I);
+      Count := Count + 1;
+    end else begin
+      if Count = Part then
+        Result := StrToIntDef(S, 0);
+      Break;
+    end;
+  until False;
+end;
+
+// Retorna -1 se A < B, 0 se A = B, 1 se A > B
+function CompareVersionStrings(const A, B: String): Integer;
+var
+  I, PA, PB: Integer;
+begin
+  Result := 0;
+  for I := 0 to 3 do begin
+    PA := GetVersionPart(A, I);
+    PB := GetVersionPart(B, I);
+    if PA < PB then begin Result := -1; Exit; end
+    else if PA > PB then begin Result := 1; Exit; end;
+  end;
+end;
+
+function InitializeSetup: Boolean;
+var
+  InstalledVer: String;
+  Cmp: Integer;
+begin
+  Result := True;
+  InstalledVer := GetInstalledVersion;
+  if InstalledVer = '' then Exit;
+
+  Cmp := CompareVersionStrings('{#MyAppVersion}', InstalledVer);
+
+  if Cmp = 0 then begin
+    Result := MsgBox(
+      'O CloudTray ' + InstalledVer + ' já está instalado.' + #13#10 + #13#10 +
+      'Deseja reinstalar a mesma versão?',
+      mbConfirmation, MB_YESNO) = IDYES;
+  end else if Cmp > 0 then begin
+    Result := MsgBox(
+      'O CloudTray ' + InstalledVer + ' está instalado.' + #13#10 + #13#10 +
+      'Deseja atualizar para a versão {#MyAppVersion}?',
+      mbConfirmation, MB_YESNO) = IDYES;
+  end else begin
+    // Downgrade: versão instalada é mais recente
+    Result := MsgBox(
+      'O CloudTray ' + InstalledVer + ' está instalado e é mais recente do que esta versão ({#MyAppVersion}).' + #13#10 + #13#10 +
+      'Deseja mesmo assim instalar a versão mais antiga?',
+      mbConfirmation, MB_YESNO) = IDYES;
+  end;
 end;
 
 // Migrate old per-user / x86 install: silently uninstall it before setup begins.
@@ -96,13 +163,18 @@ begin
   end;
 end;
 
-// Remove Run key on uninstall
+// Remove scheduled task and kill the process on uninstall
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
 begin
-  if CurUninstallStep = usPostUninstall then
-    RegDeleteValue(HKCU,
-      'Software\Microsoft\Windows\CurrentVersion\Run',
-      '{#MyAppName}');
+  if CurUninstallStep = usUninstall then begin
+    Exec('taskkill', '/f /im {#MyAppExeName}', '', SW_HIDE,
+         ewWaitUntilTerminated, ResultCode);
+    Exec(ExpandConstant('{sys}\schtasks.exe'),
+         '/Delete /TN "{#MyAppName}" /F', '', SW_HIDE,
+         ewWaitUntilTerminated, ResultCode);
+  end;
 end;
 
 // Check WebView2; if absent, silently install the bundled bootstrapper.
@@ -139,11 +211,28 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
+  ExePath: String;
 begin
   if CurStep = ssInstall then begin
     MigrateOldInstall;
     if not WebView2Present then
       InstallWebView2;
+  end;
+  if CurStep = ssPostInstall then begin
+    ExePath := ExpandConstant('{app}\{#MyAppExeName}');
+    // Always remove any previous task first (upgrade / reinstall).
+    Exec(ExpandConstant('{sys}\schtasks.exe'),
+         '/Delete /TN "{#MyAppName}" /F', '', SW_HIDE,
+         ewWaitUntilTerminated, ResultCode);
+    if WizardIsTaskSelected('startup') then begin
+      // Create an ONLOGON task for the current user — no UAC, no registry Run key.
+      Exec(ExpandConstant('{sys}\schtasks.exe'),
+           '/Create /TN "{#MyAppName}" /TR "\"' + ExePath + '\"" ' +
+           '/SC ONLOGON /DELAY 0000:30 /F',
+           '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    end;
   end;
 end;
 
@@ -152,6 +241,3 @@ Filename: "{app}\{#MyAppExeName}"; \
   Description: "Lançar {#MyAppName} agora"; \
   Flags: nowait postinstall skipifsilent
 
-[UninstallRun]
-Filename: "taskkill"; Parameters: "/f /im {#MyAppExeName}"; \
-  Flags: runhidden; RunOnceId: "KillOnUninstall"

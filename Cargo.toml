@@ -1,6 +1,6 @@
 [package]
 name = "cloudtray"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "Real-time AI usage monitor (Claude Code, Copilot, Codex) in the Windows system tray"
 license = "MIT"
@@ -23,6 +23,10 @@ window-vibrancy = "0.7.1"
 sysinfo = "0.39.3"
 netstat2 = "0.11.2"
 ureq = "3.3.0"
+zeroize = "1"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["shellapi", "winuser", "dpapi", "wincrypt", "winbase", "minwindef"] }
 
 [build-dependencies]
 winres = "0.1.12"

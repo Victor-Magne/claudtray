@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Health status of a usage window. Mirrors the colour rules used by the
 /// macOS ClaudeBar: >50% remaining = Healthy (green), 20-50% = Warning
@@ -71,6 +72,24 @@ impl WindowUsage {
     }
 }
 
+/// One usage sample for the history sparkline.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UsagePoint {
+    /// RFC3339 timestamp when the sample was taken.
+    pub at: String,
+    /// "provider_id:window_key" → remaining_pct (0–100).
+    pub values: HashMap<String, u32>,
+}
+
+/// An active Claude Code session detected from a running IDE.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveSession {
+    /// IDE display name, e.g. "Visual Studio Code".
+    pub ide: String,
+    /// Last path component of the primary workspace folder.
+    pub workspace: String,
+}
+
 /// Info about a locally installed model (e.g. from Ollama).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocalModelInfo {
@@ -96,9 +115,15 @@ pub struct ProviderSnapshot {
     /// Total tokens consumed (last 30 days), parsed from local log files.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_tokens: Option<u64>,
+    /// Estimated cost in USD for the last 30 days (based on model pricing).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_cost_usd: Option<f64>,
     /// Locally installed models (Ollama and similar runtimes).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub local_models: Vec<LocalModelInfo>,
+    /// Active Claude Code sessions (IDE integrations), detected from lock files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub active_sessions: Vec<ActiveSession>,
 }
 
 impl ProviderSnapshot {
@@ -110,7 +135,9 @@ impl ProviderSnapshot {
             note: Some(note.to_string()),
             windows: Vec::new(),
             total_tokens: None,
+            estimated_cost_usd: None,
             local_models: Vec::new(),
+            active_sessions: Vec::new(),
         }
     }
 }
@@ -123,6 +150,9 @@ pub struct Snapshot {
     /// Active theme: "dark" | "light" | "system".
     pub theme: String,
     pub providers: Vec<ProviderSnapshot>,
+    /// Sparkline history: "provider_id:window_key" → oldest-first Vec of remaining_pct.
+    #[serde(default)]
+    pub history: HashMap<String, Vec<u32>>,
 }
 
 impl Snapshot {
