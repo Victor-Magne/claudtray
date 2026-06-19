@@ -111,7 +111,13 @@ async fn main() {
         .unwrap_or_else(Instant::now);
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(150));
+        // Block until a real event arrives instead of polling every 150ms. A
+        // perpetually-waking UI thread never reaches Windows' "input idle" state,
+        // which makes the OS show the "working in background" (spinning) cursor
+        // for the whole session and wastes CPU. Tray/menu clicks post real window
+        // messages (their window-proc runs on this thread) and the background
+        // ticker/IPC wake the loop via EventLoopProxy, so nothing is missed.
+        *control_flow = ControlFlow::Wait;
 
         match event {
             Event::UserEvent(UserEvent::Tick) => spawn_refresh(&monitor, &proxy),
