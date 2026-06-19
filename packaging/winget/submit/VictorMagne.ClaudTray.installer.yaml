@@ -14,7 +14,7 @@ UpgradeBehavior: install
 Installers:
   - Architecture: x64
     InstallerUrl: https://github.com/Victor-Magne/claudtray/releases/download/v1.1.1/ClaudTray-1.1.1.exe
-    InstallerSha256: <SHA256_PENDING_v1.1.1_RELEASE>
+    InstallerSha256: 6B4D7DE4CE724BE2E9C6E01F3247BACBDB666A30D3B9C2F6283A6FA5476CDFD0
     ProductCode: '{F3A7B2C1-8D4E-4F9A-B6C2-1E5D7A3F8B9C}_is1'
     InstallerSwitches:
       Silent: /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
