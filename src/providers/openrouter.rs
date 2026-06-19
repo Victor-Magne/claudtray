@@ -88,7 +88,7 @@ fn fetch(key: &str) -> Option<KeyData> {
         let mut resp = agent(false)
             .get("https://openrouter.ai/api/v1/auth/key")
             .header("Authorization", format!("Bearer {key}"))
-            .header("User-Agent", "CloudTray")
+            .header("User-Agent", "ClaudTray")
             .call()
             .ok()?;
         if resp.status().as_u16() != 200 {

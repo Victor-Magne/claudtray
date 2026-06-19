@@ -1,19 +1,19 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+# winget locale manifest (en-US)
 
-PackageIdentifier: VictorMagne.CloudTray
-PackageVersion: 1.1.0
+PackageIdentifier: VictorMagne.ClaudTray
+PackageVersion: <VERSION>
 PackageLocale: en-US
 Publisher: Victor Magne
 PublisherUrl: https://github.com/Victor-Magne
 PublisherSupportUrl: https://github.com/Victor-Magne/claudtray/issues
-PackageName: CloudTray
+PackageName: ClaudTray
 PackageUrl: https://github.com/Victor-Magne/claudtray
 License: MIT
 LicenseUrl: https://github.com/Victor-Magne/claudtray/blob/master/LICENSE
 Copyright: Copyright (c) 2025 Victor Magne
 ShortDescription: Real-time AI usage monitor in the Windows system tray
 Description: |-
-  CloudTray for Windows monitors your remaining quota for Claude Code and other AI
+  ClaudTray for Windows monitors your remaining quota for Claude Code and other AI
   assistants (GitHub Copilot, Codex, Antigravity) directly from the system tray.
   The tray icon changes colour (green / yellow / red / grey) based on your worst
   remaining quota, and a click opens a detailed popover dashboard with per-provider
@@ -26,6 +26,6 @@ Tags:
   - tray
   - usage
   - monitor
-ReleaseNotesUrl: https://github.com/Victor-Magne/claudtray/releases/tag/v1.1.0
+ReleaseNotesUrl: https://github.com/Victor-Magne/claudtray/releases/tag/v<VERSION>
 ManifestType: defaultLocale
 ManifestVersion: 1.6.0

@@ -300,7 +300,7 @@ fn fetch_usage(token: &str) -> Option<UsageResponse> {
             .header("Accept", "application/json")
             .header("Content-Type", "application/json")
             .header("anthropic-beta", "oauth-2025-04-20")
-            .header("User-Agent", "CloudTray")
+            .header("User-Agent", "ClaudTray")
             .call()
             .ok()?;
         if resp.status().as_u16() != 200 {

@@ -1,8 +1,8 @@
-#define MyAppName      "CloudTray"
-#define MyAppVersion   "1.1.0"
+#define MyAppName      "ClaudTray"
+#define MyAppVersion   "1.1.1"
 #define MyAppPublisher "Victor Magne"
-#define MyAppExeName   "cloudtray.exe"
-#define MyAppURL       "https://github.com/Victor-Magne/cloudtray"
+#define MyAppExeName   "claudtray.exe"
+#define MyAppURL       "https://github.com/Victor-Magne/claudtray"
 
 [Setup]
 AppId={{F3A7B2C1-8D4E-4F9A-B6C2-1E5D7A3F8B9C}
@@ -27,25 +27,25 @@ WizardStyle=modern
 
 ; Output
 OutputDir=.\installer_output
-OutputBaseFilename=CloudTray
+OutputBaseFilename=ClaudTray
 Compression=lzma2/ultra64
 SolidCompression=yes
 
 ; Branding
-SetupIconFile=assets\cloudtray.ico
+SetupIconFile=assets\claudtray.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 
 [Messages]
 WelcomeLabel2=Bem-vindo ao instalador do [name]!%n%nEste programa monitoriza o uso de assistentes de IA (Claude Code, Codex, Antigravity, GitHub Copilot) em tempo real na barra de tarefas do Windows.%n%nClica em Seguinte para continuar.
-FinishedLabel=A instalação do [name] está concluída.%n%nPodes iniciá-lo a qualquer momento pelo Menu Iniciar ou procurando por "CloudTray".
+FinishedLabel=A instalação do [name] está concluída.%n%nPodes iniciá-lo a qualquer momento pelo Menu Iniciar ou procurando por "ClaudTray".
 
 [Files]
 ; App executable (CRT statically linked — no MSVC Redist needed)
 Source: "target\x86_64-pc-windows-msvc\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 ; App icon
-Source: "assets\cloudtray.ico"; DestDir: "{app}"; Flags: ignoreversion
+Source: "assets\claudtray.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 ; WebView2 Evergreen Bootstrapper — extracted to temp only when needed
 ; (~1.6 MB, downloads from Microsoft if WebView2 is absent on the machine)
@@ -55,7 +55,7 @@ Source: "assets\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; \
 [Icons]
 ; Start Menu — searchable via Windows Search
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
-  IconFilename: "{app}\cloudtray.ico"; \
+  IconFilename: "{app}\claudtray.ico"; \
   Comment: "Monitor de uso de IA em tempo real"
 Name: "{group}\Desinstalar {#MyAppName}"; Filename: "{uninstallexe}"
 
@@ -126,18 +126,18 @@ begin
 
   if Cmp = 0 then begin
     Result := MsgBox(
-      'O CloudTray ' + InstalledVer + ' já está instalado.' + #13#10 + #13#10 +
+      'O ClaudTray ' + InstalledVer + ' já está instalado.' + #13#10 + #13#10 +
       'Deseja reinstalar a mesma versão?',
       mbConfirmation, MB_YESNO) = IDYES;
   end else if Cmp > 0 then begin
     Result := MsgBox(
-      'O CloudTray ' + InstalledVer + ' está instalado.' + #13#10 + #13#10 +
+      'O ClaudTray ' + InstalledVer + ' está instalado.' + #13#10 + #13#10 +
       'Deseja atualizar para a versão {#MyAppVersion}?',
       mbConfirmation, MB_YESNO) = IDYES;
   end else begin
     // Downgrade: versão instalada é mais recente
     Result := MsgBox(
-      'O CloudTray ' + InstalledVer + ' está instalado e é mais recente do que esta versão ({#MyAppVersion}).' + #13#10 + #13#10 +
+      'O ClaudTray ' + InstalledVer + ' está instalado e é mais recente do que esta versão ({#MyAppVersion}).' + #13#10 + #13#10 +
       'Deseja mesmo assim instalar a versão mais antiga?',
       mbConfirmation, MB_YESNO) = IDYES;
   end;

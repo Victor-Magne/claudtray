@@ -2,7 +2,7 @@
 # Replace <VERSION> and <SHA256> before submitting.
 # SHA256 is printed in the GitHub release notes.
 
-PackageIdentifier: VictorMagne.CloudTray
+PackageIdentifier: VictorMagne.ClaudTray
 PackageVersion: <VERSION>
 Platform:
   - Windows.Desktop
@@ -15,7 +15,7 @@ InstallModes:
 UpgradeBehavior: install
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/Victor-Magne/claudtray/releases/download/v<VERSION>/CloudTray-<VERSION>.exe
+    InstallerUrl: https://github.com/Victor-Magne/claudtray/releases/download/v<VERSION>/ClaudTray-<VERSION>.exe
     InstallerSha256: <SHA256>
     ProductCode: '{F3A7B2C1-8D4E-4F9A-B6C2-1E5D7A3F8B9C}_is1'
     InstallerSwitches:

@@ -1,11 +1,11 @@
 [package]
-name = "cloudtray"
-version = "1.1.0"
+name = "claudtray"
+version = "1.1.1"
 edition = "2021"
 description = "Real-time AI usage monitor (Claude Code, Copilot, Codex) in the Windows system tray"
 license = "MIT"
-homepage = "https://github.com/Victor-Magne/cloudtray"
-repository = "https://github.com/Victor-Magne/cloudtray"
+homepage = "https://github.com/Victor-Magne/claudtray"
+repository = "https://github.com/Victor-Magne/claudtray"
 readme = "README.md"
 keywords = ["claude", "ai", "usage", "monitor", "tray"]
 categories = ["gui"]

@@ -46,9 +46,9 @@ fn build_html() -> String {
     let css = include_str!("ui/dashboard.css");
     let js = include_str!("ui/dashboard.js");
     let nonce = csp_nonce();
-    html.replace("__CLOUDTRAY_CSS__", css)
-        .replace("__CLOUDTRAY_JS__", js)
-        .replace("__CLOUDTRAY_NONCE__", &nonce)
+    html.replace("__CLAUDTRAY_CSS__", css)
+        .replace("__CLAUDTRAY_JS__", js)
+        .replace("__CLAUDTRAY_NONCE__", &nonce)
 }
 
 /// Generate a fresh, unguessable CSP nonce for this page load. The content is
@@ -143,7 +143,7 @@ impl Dashboard {
         dark: bool,
     ) -> Self {
         let window = WindowBuilder::new()
-            .with_title("CloudTray")
+            .with_title("ClaudTray")
             .with_inner_size(LogicalSize::new(WIDTH, HEIGHT))
             .with_decorations(false)
             .with_resizable(false)
@@ -157,10 +157,10 @@ impl Dashboard {
         // Authentic Win11 translucent backdrop.
         let _ = apply_mica(&window, Some(dark));
 
-        // Store WebView2 cache in %APPDATA%\CloudTray\WebView2 so the app can
+        // Store WebView2 cache in %APPDATA%\ClaudTray\WebView2 so the app can
         // run from Program Files (read-only) without write-permission panics.
         let webview_data_dir = dirs::config_dir()
-            .map(|d| d.join("CloudTray").join("WebView2"));
+            .map(|d| d.join("ClaudTray").join("WebView2"));
         let mut context = WebContext::new(webview_data_dir);
 
         let webview = WebViewBuilder::new_with_web_context(&mut context)
