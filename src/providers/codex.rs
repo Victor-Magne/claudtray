@@ -70,7 +70,9 @@ impl Provider for CodexProvider {
                         note: None,
                         windows,
                         total_tokens: None,
+                        estimated_cost_usd: None,
                         local_models: Vec::new(),
+                        active_sessions: Vec::new(),
                     };
                 }
             }

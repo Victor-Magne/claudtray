@@ -9,7 +9,7 @@ use serde_json;
 
 
 const WIDTH: f64 = 380.0;
-const HEIGHT: f64 = 600.0;
+const HEIGHT: f64 = 640.0;
 
 /// Custom events pumped through the tao event loop.
 #[derive(Debug, Clone)]
@@ -32,14 +32,55 @@ pub enum IpcMessage {
     Close,
     /// The webview lost focus to another window (click-away).
     Blur,
+    /// OS theme changed while preference is "system" — re-apply Mica tint.
+    SyncMica(bool),
+    SetOpenRouterKey(String),
+    SetGeminiKey(String),
+    SetHttpProxy(String),
+    /// Open a whitelisted external URL in the default browser.
+    OpenUrl(String),
 }
 
 fn build_html() -> String {
     let html = include_str!("ui/dashboard.html");
     let css = include_str!("ui/dashboard.css");
     let js = include_str!("ui/dashboard.js");
+    let nonce = csp_nonce();
     html.replace("__CLOUDTRAY_CSS__", css)
         .replace("__CLOUDTRAY_JS__", js)
+        .replace("__CLOUDTRAY_NONCE__", &nonce)
+}
+
+/// Generate a fresh, unguessable CSP nonce for this page load. The content is
+/// embedded locally (no remote script can be injected), so the dashboard's
+/// inline `<style>`/`<script>` are the only legitimate sources — a per-load
+/// nonce lets the strict CSP (`script-src 'nonce-…'`) allow them while blocking
+/// any injected inline handler or script element.
+fn csp_nonce() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let stack_marker = 0u8;
+    let mut state = nanos
+        ^ COUNTER.fetch_add(1, Ordering::Relaxed).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (&stack_marker as *const u8 as u64);
+
+    // splitmix64 expansion → 128 bits of hex.
+    let mut out = String::with_capacity(32);
+    for _ in 0..2 {
+        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        out.push_str(&format!("{z:016x}"));
+    }
+    out
 }
 
 fn parse_ipc(body: &str) -> Option<IpcMessage> {
@@ -57,6 +98,26 @@ fn parse_ipc(body: &str) -> Option<IpcMessage> {
             let token = v.get("token")?.as_str()?.to_string();
             Some(IpcMessage::SetCopilotToken(token))
         }
+        "syncMica" => {
+            let dark = v.get("dark")?.as_bool()?;
+            Some(IpcMessage::SyncMica(dark))
+        }
+        "setOpenRouterKey" => {
+            let key = v.get("key")?.as_str()?.to_string();
+            Some(IpcMessage::SetOpenRouterKey(key))
+        }
+        "setGeminiKey" => {
+            let key = v.get("key")?.as_str()?.to_string();
+            Some(IpcMessage::SetGeminiKey(key))
+        }
+        "setHttpProxy" => {
+            let proxy = v.get("proxy")?.as_str()?.to_string();
+            Some(IpcMessage::SetHttpProxy(proxy))
+        }
+        "openUrl" => {
+            let target = v.get("target")?.as_str()?.to_string();
+            Some(IpcMessage::OpenUrl(target))
+        }
         _ => None,
     }
 }
@@ -70,6 +131,9 @@ pub struct Dashboard {
     _context: WebContext,
     window: Window,
     visible: bool,
+    /// True while the underlying window (and its HWND) is valid. Cleared on drop
+    /// so background tray-notification threads don't touch a dangling HWND.
+    alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Dashboard {
@@ -115,7 +179,14 @@ impl Dashboard {
             _context: context,
             window,
             visible: false,
+            alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
+    }
+
+    /// A clone of the window-liveness flag, handed to background notification
+    /// threads so they can skip cleanup once the window is gone.
+    pub fn alive_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        std::sync::Arc::clone(&self.alive)
     }
 
     /// Push a fresh snapshot to the dashboard.
@@ -169,5 +240,14 @@ impl Dashboard {
         let y = mpos.y + msize.height as i32 - wsize.height as i32 - taskbar - margin;
         self.window
             .set_outer_position(PhysicalPosition::new(x.max(mpos.x), y.max(mpos.y)));
+    }
+}
+
+impl Drop for Dashboard {
+    fn drop(&mut self) {
+        // The window (and its HWND) is about to be destroyed; signal any pending
+        // tray-notification cleanup threads to stand down (see notification.rs).
+        self.alive
+            .store(false, std::sync::atomic::Ordering::Release);
     }
 }

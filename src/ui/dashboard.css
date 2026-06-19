@@ -252,6 +252,44 @@ header .spacer {
   color: var(--fg-faint);
 }
 
+/* sparkline */
+.sparkline {
+  width: 100%;
+  height: 24px;
+  display: block;
+  margin-top: 2px;
+  overflow: visible;
+}
+
+/* cost badge */
+.cost-badge {
+  font-size: 10px;
+  color: var(--fg-faint);
+  font-weight: 500;
+}
+
+/* active IDE session card */
+.session-card {
+  border-color: color-mix(in srgb, var(--healthy) 30%, transparent);
+}
+.session-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--healthy);
+  animation: pulse 2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.session-ide {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
 /* unavailable provider */
 .empty {
   grid-column: 1 / -1;
@@ -327,13 +365,26 @@ footer .spacer {
   backdrop-filter: blur(4px);
   display: none;
   flex-direction: column;
-  padding: 16px;
-  gap: 14px;
+  padding: 16px 16px 10px;
+  gap: 12px;
   border-radius: var(--radius);
+  overflow-y: auto;
 }
 .overlay.open {
   display: flex;
 }
+
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0 0 0 6px;
+  text-decoration: none;
+}
+.link-btn:hover { text-decoration: underline; }
 .overlay h2 {
   font-size: 15px;
   font-weight: 600;
@@ -354,6 +405,13 @@ footer .spacer {
 .seg .tab {
   flex: 1;
   text-align: center;
+}
+.token-row {
+  display: flex;
+  gap: 6px;
+}
+.token-row input {
+  flex: 1;
 }
 .field input {
   font-family: inherit;

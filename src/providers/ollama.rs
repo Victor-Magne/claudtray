@@ -97,7 +97,9 @@ impl Provider for OllamaProvider {
             note: Some(note),
             windows: Vec::new(),
             total_tokens: None,
+            estimated_cost_usd: None,
             local_models,
+            active_sessions: Vec::new(),
         }
     }
 }
@@ -108,7 +110,12 @@ fn fetch_tags() -> Option<Vec<TagModel>> {
     if resp.status().as_u16() != 200 {
         return None;
     }
-    let text = resp.body_mut().read_to_string().ok()?;
+    let text = resp
+        .body_mut()
+        .with_config()
+        .limit(super::http::MAX_BODY_BYTES)
+        .read_to_string()
+        .ok()?;
     let parsed: TagsResp = serde_json::from_str(&text).ok()?;
     Some(parsed.models.unwrap_or_default())
 }
@@ -119,7 +126,12 @@ fn fetch_running() -> Option<Vec<String>> {
     if resp.status().as_u16() != 200 {
         return None;
     }
-    let text = resp.body_mut().read_to_string().ok()?;
+    let text = resp
+        .body_mut()
+        .with_config()
+        .limit(super::http::MAX_BODY_BYTES)
+        .read_to_string()
+        .ok()?;
     let parsed: PsResp = serde_json::from_str(&text).ok()?;
     Some(
         parsed

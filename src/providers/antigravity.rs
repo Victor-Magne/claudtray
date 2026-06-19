@@ -49,7 +49,9 @@ impl Provider for AntigravityProvider {
                         note: None,
                         windows,
                         total_tokens: None,
+                        estimated_cost_usd: None,
                         local_models: Vec::new(),
+                        active_sessions: Vec::new(),
                     };
                 }
             }
@@ -124,31 +126,36 @@ fn find_listen_ports(pid: u32) -> Vec<u16> {
 }
 
 fn probe(port: u16, token: &str) -> Option<Vec<WindowUsage>> {
-    for scheme in ["https", "http"] {
-        let url = format!(
-            "{scheme}://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/GetUserStatus"
-        );
-        let resp = agent(true)
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .header("X-Codeium-Csrf-Token", token)
-            .header("Connect-Protocol-Version", "1")
-            .send(METADATA_BODY);
-        let Ok(mut resp) = resp else { continue };
-        if resp.status().as_u16() != 200 {
-            continue;
-        }
-        let Ok(text) = resp.body_mut().read_to_string() else {
-            continue;
-        };
-        if let Ok(parsed) = serde_json::from_str::<Resp>(&text) {
-            let windows = build_windows(parsed);
-            if !windows.is_empty() {
-                return Some(windows);
-            }
-        }
+    // HTTPS only. The language server uses a self-signed localhost certificate
+    // (hence `agent(true)` to skip CA validation), but we never fall back to
+    // plaintext HTTP: doing so would leak the CSRF token in clear over loopback,
+    // where any local sniffer or process could capture it.
+    let url = format!(
+        "https://127.0.0.1:{port}/exa.language_server_pb.LanguageServerService/GetUserStatus"
+    );
+    let mut resp = agent(true)
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .header("X-Codeium-Csrf-Token", token)
+        .header("Connect-Protocol-Version", "1")
+        .send(METADATA_BODY)
+        .ok()?;
+    if resp.status().as_u16() != 200 {
+        return None;
     }
-    None
+    let text = resp
+        .body_mut()
+        .with_config()
+        .limit(super::http::MAX_BODY_BYTES)
+        .read_to_string()
+        .ok()?;
+    let parsed = serde_json::from_str::<Resp>(&text).ok()?;
+    let windows = build_windows(parsed);
+    if windows.is_empty() {
+        None
+    } else {
+        Some(windows)
+    }
 }
 
 // ---- Response model ----

@@ -105,10 +105,14 @@ function renderCards() {
   if (!p.available || (!hasWindows && !hasModels)) {
     const div = document.createElement("div");
     div.className = "empty";
-    div.innerHTML =
-      '<div class="big">⌀</div><div>' +
-      (p.note || "Sem dados disponíveis") +
-      "</div>";
+    const big = document.createElement("div");
+    big.className = "big";
+    big.textContent = "⌀";
+    const note = document.createElement("div");
+    // textContent — never innerHTML: p.note comes from external API responses.
+    note.textContent = p.note || "Sem dados disponíveis";
+    div.appendChild(big);
+    div.appendChild(note);
     wrap.appendChild(div);
     return;
   }
@@ -120,8 +124,12 @@ function renderCards() {
     });
   }
 
+  if (p.active_sessions && p.active_sessions.length > 0) {
+    p.active_sessions.forEach((s) => wrap.appendChild(sessionCard(s)));
+  }
+
   if (p.total_tokens != null && p.total_tokens > 0) {
-    wrap.appendChild(totalTokensCard(p.total_tokens));
+    wrap.appendChild(totalTokensCard(p));
   }
 
   if (hasModels) {
@@ -136,7 +144,37 @@ function formatTokens(n) {
   return n.toString();
 }
 
-function totalTokensCard(tokens) {
+function sessionCard(s) {
+  const el = document.createElement("div");
+  el.className = "card wide session-card";
+
+  const top = document.createElement("div");
+  top.className = "top";
+
+  const lbl = document.createElement("span");
+  lbl.className = "wlabel";
+  lbl.textContent = "SESSÃO ATIVA";
+  top.appendChild(lbl);
+
+  const dot = document.createElement("span");
+  dot.className = "session-dot";
+  top.appendChild(dot);
+
+  const ide = document.createElement("div");
+  ide.className = "session-ide";
+  ide.textContent = s.ide;
+
+  const ws = document.createElement("div");
+  ws.className = "reset";
+  ws.textContent = s.workspace;
+
+  el.appendChild(top);
+  el.appendChild(ide);
+  el.appendChild(ws);
+  return el;
+}
+
+function totalTokensCard(p) {
   const el = document.createElement("div");
   el.className = "card wide";
 
@@ -147,10 +185,17 @@ function totalTokensCard(tokens) {
   lbl.textContent = "TOKENS GASTOS (30d)";
   top.appendChild(lbl);
 
+  if (p.estimated_cost_usd != null && p.estimated_cost_usd > 0) {
+    const cost = document.createElement("span");
+    cost.className = "cost-badge";
+    cost.textContent = "~$" + p.estimated_cost_usd.toFixed(2);
+    top.appendChild(cost);
+  }
+
   const val = document.createElement("div");
   val.className = "pct";
   val.style.fontSize = "26px";
-  val.textContent = formatTokens(tokens);
+  val.textContent = formatTokens(p.total_tokens);
 
   el.appendChild(top);
   el.appendChild(val);
@@ -192,6 +237,31 @@ function localModelCard(m) {
   return el;
 }
 
+function sparkline(values, status) {
+  if (!values || values.length < 3) return null;
+  const w = 100, h = 24, n = values.length;
+  const pts = values.map((v, i) => [
+    (i / (n - 1)) * w,
+    h - (v / 100) * h * 0.9 - h * 0.05,
+  ]);
+  const d = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+  const colors = { healthy: "var(--healthy)", warning: "var(--warning)", critical: "var(--critical)", depleted: "var(--depleted)" };
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.className = "sparkline";
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", d);
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", colors[status] || "var(--depleted)");
+  path.setAttribute("stroke-width", "1.5");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("vector-effect", "non-scaling-stroke");
+  svg.appendChild(path);
+  return svg;
+}
+
 function card(w, wide) {
   const el = document.createElement("div");
   el.className = "card" + (wide ? " wide" : "");
@@ -199,24 +269,30 @@ function card(w, wide) {
 
   const top = document.createElement("div");
   top.className = "top";
-  top.innerHTML =
-    '<span class="wlabel">' +
-    w.label +
-    "</span>" +
-    '<span class="badge ' +
-    sc +
-    '">' +
-    STATUS_LABEL[w.status] +
-    "</span>";
+  const lbl = document.createElement("span");
+  lbl.className = "wlabel";
+  // textContent — w.label originates from external API responses (XSS sink).
+  lbl.textContent = w.label;
+  const badge = document.createElement("span");
+  badge.className = "badge " + sc;
+  badge.textContent = STATUS_LABEL[w.status];
+  top.appendChild(lbl);
+  top.appendChild(badge);
 
   const pct = document.createElement("div");
   pct.className = "pct";
-  pct.innerHTML = w.remaining_pct + "<small>%</small>";
+  pct.appendChild(document.createTextNode(String(w.remaining_pct)));
+  const small = document.createElement("small");
+  small.textContent = "%";
+  pct.appendChild(small);
 
   const bar = document.createElement("div");
   bar.className = "bar";
-  bar.innerHTML =
-    '<span class="' + sc + '" style="width:' + w.remaining_pct + '%"></span>';
+  const fill = document.createElement("span");
+  fill.className = sc;
+  // Set width via CSSOM (allowed by CSP) instead of an inline style attribute.
+  fill.style.width = w.remaining_pct + "%";
+  bar.appendChild(fill);
 
   const reset = document.createElement("div");
   reset.className = "reset";
@@ -227,6 +303,18 @@ function card(w, wide) {
   el.appendChild(pct);
   el.appendChild(bar);
   el.appendChild(reset);
+
+  // Sparkline from history
+  if (DATA && DATA.history) {
+    const p = DATA.providers.find((x) => x.id === activeProvider);
+    if (p) {
+      const histKey = p.id + ":" + w.key;
+      const hist = DATA.history[histKey];
+      const spark = sparkline(hist, w.status);
+      if (spark) el.appendChild(spark);
+    }
+  }
+
   return el;
 }
 
@@ -290,29 +378,60 @@ document.getElementById("btn-theme").onclick = () => {
 const settings = document.getElementById("settings");
 document.getElementById("btn-settings").onclick = () => {
   document.getElementById("copilot-token").value = "";
+  document.getElementById("openrouter-key").value = "";
+  document.getElementById("gemini-key").value = "";
+  document.getElementById("http-proxy").value = "";
   settings.classList.add("open");
 };
 document.getElementById("btn-settings-close").onclick = () =>
   settings.classList.remove("open");
+
 document.querySelectorAll("#theme-seg .tab").forEach((el) => {
   el.onclick = () => {
     applyTheme(el.dataset.themeValue);
     sendIpc({ type: "setTheme", theme: el.dataset.themeValue });
   };
 });
+
+// Generic clipboard paste for all ⎘ buttons
+document.getElementById("btn-paste-token").onclick = async () => {
+  try { document.getElementById("copilot-token").value = (await navigator.clipboard.readText()).trim(); } catch (_) {}
+};
+document.querySelectorAll(".paste-btn").forEach((btn) => {
+  btn.onclick = async () => {
+    try {
+      document.getElementById(btn.dataset.target).value = (await navigator.clipboard.readText()).trim();
+    } catch (_) {}
+  };
+});
+
+// External links (whitelisted — opened in the default browser by Rust)
+document.querySelectorAll(".link-btn").forEach((btn) => {
+  btn.onclick = () => sendIpc({ type: "openUrl", target: btn.dataset.url });
+});
+
 document.getElementById("btn-save").onclick = () => {
-  const token = document.getElementById("copilot-token").value.trim();
-  if (token) sendIpc({ type: "setCopilotToken", token: token });
+  const copilot = document.getElementById("copilot-token").value.trim();
+  const orKey   = document.getElementById("openrouter-key").value.trim();
+  const gemini  = document.getElementById("gemini-key").value.trim();
+  const proxy   = document.getElementById("http-proxy").value.trim();
+  if (copilot) sendIpc({ type: "setCopilotToken", token: copilot });
+  if (orKey)   sendIpc({ type: "setOpenRouterKey", key: orKey });
+  if (gemini)  sendIpc({ type: "setGeminiKey", key: gemini });
+  sendIpc({ type: "setHttpProxy", proxy });
   sendIpc({ type: "refresh" });
   settings.classList.remove("open");
 };
 
-// react to OS theme changes when in "system" mode
+// react to OS theme changes when in "system" mode — also sync Mica backdrop in Rust
 if (window.matchMedia) {
   window
     .matchMedia("(prefers-color-scheme: light)")
-    .addEventListener("change", () => {
-      if (themePref === "system") applyTheme("system");
+    .addEventListener("change", (e) => {
+      if (themePref === "system") {
+        applyTheme("system");
+        sendIpc({ type: "syncMica", dark: !e.matches });
+      }
     });
 }
 
