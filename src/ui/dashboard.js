@@ -4,6 +4,9 @@
 let DATA = null;
 let activeProvider = null;
 let themePref = "dark";
+// Live Windows theme, pushed from Rust via window.__setOsTheme. This (not the
+// webview's own prefers-color-scheme) is the source of truth for "system" mode.
+let osThemeDark = true;
 
 const STATUS_LABEL = {
   healthy: "HEALTHY",
@@ -25,20 +28,32 @@ function sendIpc(msg) {
 // ---- Theme ----
 function applyTheme(pref) {
   themePref = pref || "dark";
-  let resolved = themePref;
-  if (themePref === "system") {
-    resolved =
-      window.matchMedia &&
-      window.matchMedia("(prefers-color-scheme: light)").matches
-        ? "light"
-        : "dark";
-  }
+  // "system" follows the OS (reported by Rust); otherwise honour the choice.
+  const resolved =
+    themePref === "system"
+      ? osThemeDark
+        ? "dark"
+        : "light"
+      : themePref === "light"
+      ? "light"
+      : "dark";
   document.documentElement.setAttribute("data-theme", resolved);
+  // The manual ◐ toggle only makes sense for an explicit dark/light choice — in
+  // automatic (system) mode the OS is in charge, so hide it from the footer.
+  const toggle = document.getElementById("btn-theme");
+  if (toggle) toggle.style.display = themePref === "system" ? "none" : "";
   // reflect in settings segmented control
   document.querySelectorAll("#theme-seg .tab").forEach((el) => {
     el.classList.toggle("active", el.dataset.themeValue === themePref);
   });
 }
+
+// Rust pushes the live Windows theme here so "system" mode tracks the OS in
+// real time (initial load and on every Windows light/dark switch).
+window.__setOsTheme = function (isDark) {
+  osThemeDark = !!isDark;
+  if (themePref === "system") applyTheme("system");
+};
 
 // ---- Data entry point (called from Rust) ----
 window.updateData = function (snapshot) {
@@ -423,17 +438,9 @@ document.getElementById("btn-save").onclick = () => {
   settings.classList.remove("open");
 };
 
-// react to OS theme changes when in "system" mode — also sync Mica backdrop in Rust
-if (window.matchMedia) {
-  window
-    .matchMedia("(prefers-color-scheme: light)")
-    .addEventListener("change", (e) => {
-      if (themePref === "system") {
-        applyTheme("system");
-        sendIpc({ type: "syncMica", dark: !e.matches });
-      }
-    });
-}
+// OS theme changes are driven from Rust (WindowEvent::ThemeChanged →
+// window.__setOsTheme), which also retints the Mica backdrop — so there's no
+// matchMedia listener here and the webview's own prefers-color-scheme is unused.
 
 // Close on click-away: a window-level blur means another app/window was
 // activated. Intra-page focus moves (tabs, the settings input) don't fire it.
