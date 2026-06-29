@@ -52,9 +52,13 @@ jobs:
         run: |
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # Rename to include version so each release has a unique asset name
+          # Versioned, suffixed asset names so each release is unique and the
+          # winget (Setup) / scoop (portable) manifests can target the right file.
           $v = "${{ steps.ver.outputs.version }}"
-          Rename-Item installer_output\ClaudTray.exe "ClaudTray-$v.exe"
+          Rename-Item installer_output\ClaudTray.exe "ClaudTray-$v-Setup.exe"
+          # Standalone portable binary (CRT static, no installer) for scoop.
+          Copy-Item target\x86_64-pc-windows-msvc\release\claudtray.exe `
+            "installer_output\ClaudTray-$v-portable.exe"
 
       # ── Code signing (SignPath) ────────────────────────────────────────────
       # Only runs when the repo variable SIGNPATH_ENABLED == 'true'. Configure
@@ -89,10 +93,14 @@ jobs:
         id: sha256
         shell: pwsh
         run: |
-          $file = Get-ChildItem installer_output\*.exe | Select-Object -First 1
-          $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToUpper()
-          echo "hash=$hash" >> $env:GITHUB_OUTPUT
-          echo "filename=$($file.Name)" >> $env:GITHUB_OUTPUT
+          $setup = Get-ChildItem installer_output\*-Setup.exe | Select-Object -First 1
+          $portable = Get-ChildItem installer_output\*-portable.exe | Select-Object -First 1
+          $setupHash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToUpper()
+          $portableHash = (Get-FileHash $portable.FullName -Algorithm SHA256).Hash.ToLower()
+          echo "hash=$setupHash" >> $env:GITHUB_OUTPUT
+          echo "filename=$($setup.Name)" >> $env:GITHUB_OUTPUT
+          echo "portable_hash=$portableHash" >> $env:GITHUB_OUTPUT
+          echo "portable_filename=$($portable.Name)" >> $env:GITHUB_OUTPUT
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -113,12 +121,16 @@ jobs:
             scoop install claudtray
             ```
 
-            **Direct installer** — download `${{ steps.sha256.outputs.filename }}` below.
+            **Direct download** — grab `${{ steps.sha256.outputs.filename }}`
+            (installer) or `${{ steps.sha256.outputs.portable_filename }}`
+            (portable, no install) below.
 
             ---
 
-            ### SHA256 (installer)
+            ### SHA256
             ```
-            ${{ steps.sha256.outputs.hash }}
+            Setup     ${{ steps.sha256.outputs.hash }}
+            Portable  ${{ steps.sha256.outputs.portable_hash }}
             ```
-            Use this hash when submitting the winget or Scoop manifests.
+            Use the Setup hash for the winget manifest and the Portable hash for
+            the Scoop manifest.
