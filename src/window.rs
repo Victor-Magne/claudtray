@@ -2,7 +2,7 @@ use crate::model::Snapshot;
 use tao::dpi::{LogicalSize, PhysicalPosition};
 use tao::event_loop::{EventLoopProxy, EventLoopWindowTarget};
 use tao::platform::windows::{WindowBuilderExtWindows, WindowExtWindows};
-use tao::window::{Window, WindowBuilder};
+use tao::window::{Theme, Window, WindowBuilder};
 use window_vibrancy::apply_mica;
 use wry::{WebContext, WebView, WebViewBuilder};
 use serde_json;
@@ -20,6 +20,14 @@ pub enum UserEvent {
     Tick,
     /// A background refresh finished and produced this snapshot.
     Snapshot(Snapshot),
+    /// Left-click on the tray icon — toggle the dashboard popover.
+    TrayToggle,
+    /// "Mostrar painel" tray-menu item.
+    MenuShow,
+    /// "Atualizar" tray-menu item.
+    MenuRefresh,
+    /// "Sair" tray-menu item.
+    MenuExit,
 }
 
 /// Actions the dashboard can request from Rust (mirrors `dashboard.js`).
@@ -140,7 +148,7 @@ impl Dashboard {
     pub fn new(
         target: &EventLoopWindowTarget<UserEvent>,
         proxy: EventLoopProxy<UserEvent>,
-        dark: bool,
+        theme_pref: &str,
     ) -> Self {
         let window = WindowBuilder::new()
             .with_title("ClaudTray")
@@ -154,7 +162,15 @@ impl Dashboard {
             .build(target)
             .expect("falha ao criar a janela do dashboard");
 
-        // Authentic Win11 translucent backdrop.
+        // Authentic Win11 translucent backdrop. In "system" mode follow the live
+        // Windows theme (queried from the freshly-built window); otherwise honour
+        // the explicit preference. We never call `with_theme`, so the window keeps
+        // reporting the OS theme and `WindowEvent::ThemeChanged` keeps firing.
+        let dark = match theme_pref {
+            "light" => false,
+            "dark" => true,
+            _ => window.theme() == Theme::Dark,
+        };
         let _ = apply_mica(&window, Some(dark));
 
         // Store WebView2 cache in %APPDATA%\ClaudTray\WebView2 so the app can
@@ -224,6 +240,21 @@ impl Dashboard {
     /// Re-apply the Mica backdrop tint when the theme changes.
     pub fn set_dark(&self, dark: bool) {
         let _ = apply_mica(&self.window, Some(dark));
+    }
+
+    /// The current Windows app theme (drives "system" mode).
+    pub fn os_theme_is_dark(&self) -> bool {
+        self.window.theme() == Theme::Dark
+    }
+
+    /// Tell the dashboard JS the current Windows theme so "system" mode can
+    /// resolve to light/dark. Safe to call while the window is hidden — the
+    /// WebView2 instance stays alive across show/hide.
+    pub fn notify_os_theme(&self) {
+        let dark = self.os_theme_is_dark();
+        let _ = self
+            .webview
+            .evaluate_script(&format!("window.__setOsTheme({});", dark));
     }
 
     fn position_bottom_right(&self) {

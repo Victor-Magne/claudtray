@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tao::event::Event;
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, ContextMenu};
+use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use window::{Dashboard, IpcMessage, UserEvent};
 
@@ -42,7 +42,10 @@ async fn main() {
         return;
     }
 
-    let initial_dark = monitor.lock().unwrap().state.theme != "light";
+    // Local mirror of the persisted theme preference ("dark" | "light" |
+    // "system"). Kept in sync on SetTheme so the OS-theme-change handler knows
+    // whether it should react.
+    let mut theme_pref = monitor.lock().unwrap().state.theme.clone();
     let mut last: Option<Snapshot> = monitor.lock().unwrap().state.last_snapshot.clone();
 
     // --- Tray menu (fallback controls) ---
@@ -60,11 +63,6 @@ async fn main() {
     let refresh_id = refresh_item.id().clone();
     let exit_id = exit_item.id().clone();
 
-    // Keep the menu separate so we control WHEN it appears (right-click only).
-    // NOT passed to with_menu() — that would cause tray-icon to auto-show it on
-    // left-click on Windows, conflicting with our toggle behaviour.
-    let context_menu = tray_menu;
-
     let initial_status = last.as_ref().map(|s| s.worst_status()).unwrap_or(Status::Healthy);
     let initial_tooltip = last.as_ref().map(|s| tooltip(s)).unwrap_or_else(|| "ClaudTray — a carregar…".to_string());
     // Alert tracking: fire a notification when any window transitions into Critical/Depleted.
@@ -78,22 +76,69 @@ async fn main() {
 
     let icon = Icon::from_rgba(generate_dynamic_icon(initial_status), 64, 64)
         .expect("ícone RGBA inválido");
+    // Attach the context menu to the tray and let tray-icon show it natively on
+    // right-click. The library does the SetForegroundWindow + TrackPopupMenu
+    // dance for us, so the menu pops up at the cursor and dismisses cleanly on
+    // click-away. Left-click is kept menu-free so we can use it to toggle the
+    // dashboard ourselves.
     let mut tray: Option<TrayIcon> = Some(
         TrayIconBuilder::new()
             .with_tooltip(initial_tooltip)
             .with_icon(icon)
+            .with_menu(Box::new(tray_menu))
+            .with_menu_on_left_click(false)
             .build()
             .expect("falha ao criar o tray icon"),
     );
 
+    // Forward tray + menu events into the event loop through the proxy. The
+    // crate's default global channels are only drained when the loop happens to
+    // wake for some other reason (an IPC message or the 5–60 s ticker), which
+    // made clicks feel laggy and could replay the menu; routing each event
+    // through `EventLoopProxy` wakes the loop at once and handles it exactly
+    // once. This replaces `TrayIconEvent::receiver()` / `MenuEvent::receiver()`.
+    {
+        let tray_proxy = proxy.clone();
+        TrayIconEvent::set_event_handler(Some(move |event| {
+            // Only the left-click release matters here; right-click is handled
+            // natively by the attached menu.
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                let _ = tray_proxy.send_event(UserEvent::TrayToggle);
+            }
+        }));
+
+        let menu_proxy = proxy.clone();
+        let (id_show, id_refresh, id_exit) =
+            (show_id.clone(), refresh_id.clone(), exit_id.clone());
+        MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
+            let mapped = if event.id == id_exit {
+                UserEvent::MenuExit
+            } else if event.id == id_refresh {
+                UserEvent::MenuRefresh
+            } else if event.id == id_show {
+                UserEvent::MenuShow
+            } else {
+                return;
+            };
+            let _ = menu_proxy.send_event(mapped);
+        }));
+    }
+
     // --- Dashboard popover (starts hidden) ---
-    let mut dashboard = Dashboard::new(&event_loop, proxy.clone(), initial_dark);
+    let mut dashboard = Dashboard::new(&event_loop, proxy.clone(), &theme_pref);
 
     // First refresh + adaptive background ticker. While the popover is open we
     // poll fast (near real-time); when it's hidden we slow down to spare the
     // provider APIs. All refreshes run off the UI thread (network I/O).
     spawn_refresh(&monitor, &proxy);
-    let dashboard_open = Arc::new(AtomicBool::new(false));
+    // The dashboard is shown on launch (see below), so start the ticker on the
+    // fast cadence right away.
+    let dashboard_open = Arc::new(AtomicBool::new(true));
     let tick_proxy = proxy.clone();
     let ticker_open = Arc::clone(&dashboard_open);
     tokio::spawn(async move {
@@ -106,20 +151,24 @@ async fn main() {
         }
     });
 
-    let menu_rx = MenuEvent::receiver();
-    let tray_rx = TrayIconEvent::receiver();
-    // Guards the post-show focus settling to prevent immediate blur-close.
-    let mut last_action = Instant::now()
-        .checked_sub(Duration::from_secs(10))
-        .unwrap_or_else(Instant::now);
+    // Open the dashboard on launch so it's the default window. `last_action`
+    // starts at `now` so the 1500ms blur grace is armed from the moment we show
+    // — the initial focus settling won't trigger a click-away that closes it
+    // immediately. It also guards subsequent show/hide actions in the loop. The
+    // tray keeps running in the background; closing the popover hides it.
+    let mut last_action = Instant::now();
+    dashboard.show();
+    if let Some(snap) = &last {
+        dashboard.push(snap);
+    }
 
     event_loop.run(move |event, _, control_flow| {
         // Block until a real event arrives instead of polling every 150ms. A
         // perpetually-waking UI thread never reaches Windows' "input idle" state,
         // which makes the OS show the "working in background" (spinning) cursor
-        // for the whole session and wastes CPU. Tray/menu clicks post real window
-        // messages (their window-proc runs on this thread) and the background
-        // ticker/IPC wake the loop via EventLoopProxy, so nothing is missed.
+        // for the whole session and wastes CPU. Tray/menu clicks, the background
+        // ticker and IPC all wake the loop via EventLoopProxy (see the
+        // set_event_handler forwarding above), so nothing is missed.
         *control_flow = ControlFlow::Wait;
 
         match event {
@@ -145,16 +194,55 @@ async fn main() {
                 dashboard.push(&snap);
                 last = Some(snap);
             }
+            Event::UserEvent(UserEvent::TrayToggle) => {
+                // Left-click on the tray icon. The 300 ms debounce collapses the
+                // second click of a double-click (and a near-simultaneous
+                // click-away blur) so one physical click toggles exactly once.
+                if last_action.elapsed() > Duration::from_millis(300) {
+                    if dashboard.is_visible() {
+                        dashboard.hide();
+                    } else {
+                        dashboard.show();
+                        if let Some(snap) = &last {
+                            dashboard.push(snap);
+                        }
+                    }
+                    last_action = Instant::now();
+                }
+            }
+            Event::UserEvent(UserEvent::MenuShow) => {
+                dashboard.show();
+                if let Some(snap) = &last {
+                    dashboard.push(snap);
+                }
+                last_action = Instant::now();
+            }
+            Event::UserEvent(UserEvent::MenuRefresh) => spawn_refresh(&monitor, &proxy),
+            Event::UserEvent(UserEvent::MenuExit) => {
+                tray.take();
+                *control_flow = ControlFlow::Exit;
+            }
             Event::UserEvent(UserEvent::Ipc(msg)) => match msg {
                 IpcMessage::Ready => {
+                    // Tell JS the current Windows theme first so "system" mode
+                    // resolves correctly, then push the latest snapshot.
+                    dashboard.notify_os_theme();
                     if let Some(snap) = &last {
                         dashboard.push(snap);
                     }
                 }
                 IpcMessage::Refresh => spawn_refresh(&monitor, &proxy),
                 IpcMessage::SetTheme(theme) => {
-                    // Applied instantly in JS; here we only persist + retint Mica.
-                    dashboard.set_dark(theme != "light");
+                    // Applied instantly in JS; here we mirror the preference,
+                    // retint the Mica backdrop and persist. "system" follows the
+                    // live Windows theme rather than the literal string.
+                    theme_pref = theme.clone();
+                    let dark = if theme == "system" {
+                        dashboard.os_theme_is_dark()
+                    } else {
+                        theme != "light"
+                    };
+                    dashboard.set_dark(dark);
                     spawn_set_theme(&monitor, theme);
                 }
                 IpcMessage::SetCopilotToken(token) => {
@@ -221,59 +309,19 @@ async fn main() {
                     }
                 }
             }
+            Event::WindowEvent {
+                event: tao::event::WindowEvent::ThemeChanged(theme),
+                ..
+            } => {
+                // The user flipped Windows between light and dark. Only act while
+                // following the system theme: retint Mica and tell JS so the
+                // dashboard tracks the OS in real time.
+                if theme_pref == "system" {
+                    dashboard.set_dark(theme == tao::window::Theme::Dark);
+                    dashboard.notify_os_theme();
+                }
+            }
             _ => {}
-        }
-
-        // Process all tray events.
-        // Left click  → toggle dashboard (300ms debounce against double-click).
-        // Right click → show context menu manually on the dashboard window.
-        while let Ok(tray_event) = tray_rx.try_recv() {
-            match tray_event {
-                TrayIconEvent::Click {
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                } => {
-                    if last_action.elapsed() > Duration::from_millis(300) {
-                        if dashboard.is_visible() {
-                            dashboard.hide();
-                        } else {
-                            dashboard.show();
-                            if let Some(snap) = &last {
-                                dashboard.push(snap);
-                            }
-                        }
-                        last_action = Instant::now();
-                    }
-                }
-                TrayIconEvent::Click {
-                    button: MouseButton::Right,
-                    button_state: MouseButtonState::Up,
-                    ..
-                } => {
-                    unsafe {
-                        let _ = context_menu
-                            .show_context_menu_for_hwnd(dashboard.hwnd(), None);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Tray menu items.
-        if let Ok(ev) = menu_rx.try_recv() {
-            if ev.id == exit_id {
-                tray.take();
-                *control_flow = ControlFlow::Exit;
-            } else if ev.id == refresh_id {
-                spawn_refresh(&monitor, &proxy);
-            } else if ev.id == show_id {
-                dashboard.show();
-                if let Some(snap) = &last {
-                    dashboard.push(snap);
-                }
-                last_action = Instant::now();
-            }
         }
 
         // Keep the ticker cadence in sync with popover visibility (fast when

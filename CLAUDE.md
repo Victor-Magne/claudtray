@@ -44,6 +44,6 @@ The app is a single-binary Windows system tray application with a WebView2 popov
 - `.cargo/config.toml` sets `target-feature=+crt-static` for the MSVC target — the release binary has no runtime dependencies.
 - The UI has Portuguese strings (tray menu labels, error notes) — keep that consistent.
 - The dashboard is positioned bottom-right above the taskbar (`window.rs:position_bottom_right`). The 48px taskbar height is a fixed approximation.
-- Single-click on the tray icon shows the context menu; double-click toggles the dashboard popover.
+- Left-click on the tray icon toggles the dashboard popover; right-click shows the context menu, rendered natively by `tray-icon` (`with_menu` + `with_menu_on_left_click(false)`). Tray and menu events are forwarded into the event loop via `EventLoopProxy` (`TrayIconEvent`/`MenuEvent::set_event_handler`) so they're handled immediately and exactly once — do not poll the crate's global `receiver()` channels.
 - Releases are triggered by pushing a `v*` tag; the CI workflow patches the version in `installer.iss` before building.
 - After each release, update `packaging/winget/` and `packaging/scoop/claudtray.json` with the new version and SHA256 printed in the release notes.
