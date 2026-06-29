@@ -1,4 +1,7 @@
-#![windows_subsystem = "windows"]
+// Hide the console window in release builds (this is a tray app); keep it in
+// debug builds so `println!`/panics are visible during development. The
+// CLAUDTRAY_DUMP debug path writes to a file, so it needs no console either.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod dpapi;
 mod model;
@@ -66,7 +69,12 @@ async fn main() {
     let initial_tooltip = last.as_ref().map(|s| tooltip(s)).unwrap_or_else(|| "ClaudTray — a carregar…".to_string());
     // Alert tracking: fire a notification when any window transitions into Critical/Depleted.
     let mut prev_status = initial_status;
-    let mut last_alert = Instant::now() - Duration::from_secs(3600);
+    // Initialise "in the past" so the first alert can fire immediately.
+    // checked_sub avoids an overflow panic on freshly-booted machines where the
+    // monotonic clock (uptime) is still under an hour.
+    let mut last_alert = Instant::now()
+        .checked_sub(Duration::from_secs(3600))
+        .unwrap_or_else(Instant::now);
 
     let icon = Icon::from_rgba(generate_dynamic_icon(initial_status), 64, 64)
         .expect("ícone RGBA inválido");
@@ -101,10 +109,18 @@ async fn main() {
     let menu_rx = MenuEvent::receiver();
     let tray_rx = TrayIconEvent::receiver();
     // Guards the post-show focus settling to prevent immediate blur-close.
-    let mut last_action = Instant::now() - Duration::from_secs(10);
+    let mut last_action = Instant::now()
+        .checked_sub(Duration::from_secs(10))
+        .unwrap_or_else(Instant::now);
 
     event_loop.run(move |event, _, control_flow| {
-        *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(150));
+        // Block until a real event arrives instead of polling every 150ms. A
+        // perpetually-waking UI thread never reaches Windows' "input idle" state,
+        // which makes the OS show the "working in background" (spinning) cursor
+        // for the whole session and wastes CPU. Tray/menu clicks post real window
+        // messages (their window-proc runs on this thread) and the background
+        // ticker/IPC wake the loop via EventLoopProxy, so nothing is missed.
+        *control_flow = ControlFlow::Wait;
 
         match event {
             Event::UserEvent(UserEvent::Tick) => spawn_refresh(&monitor, &proxy),
