@@ -1,4 +1,7 @@
-#![windows_subsystem = "windows"]
+// Hide the console window in release builds (this is a tray app); keep it in
+// debug builds so `println!`/panics are visible during development. The
+// CLAUDTRAY_DUMP debug path writes to a file, so it needs no console either.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod dpapi;
 mod model;
