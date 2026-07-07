@@ -1,8 +1,8 @@
 [package]
 name = "claudtray"
-version = "1.1.3"
+version = "1.2.0"
 edition = "2021"
-description = "Real-time AI usage monitor (Claude Code, Copilot, Codex) in the Windows system tray"
+description = "Real-time AI usage monitor (Claude Code, Copilot, Codex) in the system tray (Windows & Linux)"
 license = "MIT"
 homepage = "https://github.com/Victor-Magne/claudtray"
 repository = "https://github.com/Victor-Magne/claudtray"
@@ -12,14 +12,12 @@ categories = ["gui"]
 
 [dependencies]
 tao = "0.31"
-tray-icon = "0.19"
 tokio = { version = "1.35", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5.0"
 wry = { version = "0.55.1", features = ["transparent"] }
-window-vibrancy = "0.7.1"
 sysinfo = "0.39.3"
 netstat2 = "0.11.2"
 ureq = "3.3.0"
@@ -27,6 +25,17 @@ zeroize = "1"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["shellapi", "winuser", "dpapi", "wincrypt", "winbase", "minwindef"] }
+window-vibrancy = "0.7.1"
+# Linux usa ksni (o backend appindicator do tray-icon não entrega cliques)
+tray-icon = "0.19"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+notify-rust = "4"
+gtk = "0.18"
+# v0_6 unlocks is_supported() + set_keyboard_mode (needs libgtk-layer-shell >= 0.6)
+gtk-layer-shell = { version = "0.8", features = ["v0_6"] }
+chacha20poly1305 = "0.10"
+ksni = "0.3.5"
 
 [build-dependencies]
 winres = "0.1.12"

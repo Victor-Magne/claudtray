@@ -1,4 +1,4 @@
-use crate::model::{ProviderSnapshot, Snapshot, UsagePoint};
+use crate::model::{ProviderInfo, ProviderSnapshot, Snapshot, UsagePoint};
 use crate::providers;
 use crate::state::AppState;
 use chrono::Local;
@@ -40,10 +40,15 @@ impl QuotaMonitor {
         // shared `&AppState` instead of each cloning it, so the credential
         // fields are not duplicated across N threads' memory during a refresh.
         let state = &self.state;
+        // Hidden providers are skipped entirely: no collection thread (no API
+        // calls) and no entry in the snapshot, so they don't affect the tray
+        // icon or alerts. The full catalog still goes out for the settings UI.
+        let disabled = self.state.disabled_providers.clone();
         let mut raw_results: HashMap<String, ProviderSnapshot> =
             std::thread::scope(|scope| {
                 let handles: Vec<_> = providers::all()
                     .into_iter()
+                    .filter(|p| !disabled.iter().any(|d| d == p.id()))
                     .map(|provider| {
                         scope.spawn(move || {
                             let snap = provider.collect(state);
@@ -67,6 +72,9 @@ impl QuotaMonitor {
         // its last good value for STALE_TTL so fast polling doesn't flicker.
         for provider in providers::all() {
             let id = provider.id();
+            if disabled.iter().any(|d| d == id) {
+                continue;
+            }
             let fresh = raw_results.remove(id).unwrap_or_else(|| {
                 ProviderSnapshot::unavailable(id, provider.name(), "Erro na recolha")
             });
@@ -117,16 +125,37 @@ impl QuotaMonitor {
             }
         }
 
+        let catalog = providers::all()
+            .iter()
+            .map(|p| ProviderInfo {
+                id: p.id().to_string(),
+                name: p.name().to_string(),
+                enabled: !disabled.iter().any(|d| d == p.id()),
+            })
+            .collect();
+
         let snapshot = Snapshot {
             updated_at: Local::now().to_rfc3339(),
             theme: self.state.theme.clone(),
             providers: snaps,
+            catalog,
             history: history_map,
         };
         self.state.last_snapshot = Some(snapshot.clone());
         self.state.save();
         self.last = Some(snapshot.clone());
         snapshot
+    }
+
+    /// Persist the set of hidden providers. Unknown ids are dropped so a stale
+    /// or hand-edited list can't grow unbounded.
+    pub fn set_disabled_providers(&mut self, ids: Vec<String>) {
+        let known = providers::all();
+        self.state.disabled_providers = ids
+            .into_iter()
+            .filter(|id| known.iter().any(|p| p.id() == id))
+            .collect();
+        self.state.save();
     }
 
     pub fn set_theme(&mut self, theme: &str) {

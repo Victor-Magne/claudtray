@@ -75,6 +75,10 @@ function render() {
   renderTabs();
   renderCards();
   renderUpdated();
+  // keep the settings checkboxes in sync while the panel is open
+  if (document.getElementById("settings").classList.contains("open")) {
+    renderProviderList();
+  }
   // a fresh snapshot always follows a refresh — restore the button label
   document.getElementById("btn-refresh").innerHTML = "↻ Atualizar";
 }
@@ -390,12 +394,40 @@ document.getElementById("btn-theme").onclick = () => {
   sendIpc({ type: "setTheme", theme: next });
 };
 
+// ---- Provider visibility (settings checkboxes) ----
+// Toggles apply immediately: Rust persists the list, re-collects and pushes a
+// fresh snapshot, which re-renders tabs/cards without the hidden providers.
+function renderProviderList() {
+  const wrap = document.getElementById("provider-list");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  const catalog = (DATA && DATA.catalog) || [];
+  for (const p of catalog) {
+    const row = document.createElement("label");
+    row.className = "provider-row";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = !!p.enabled;
+    cb.onchange = () => {
+      p.enabled = cb.checked;
+      const disabled = catalog.filter((x) => !x.enabled).map((x) => x.id);
+      sendIpc({ type: "setProviders", disabled });
+    };
+    const name = document.createElement("span");
+    name.textContent = p.name;
+    row.appendChild(cb);
+    row.appendChild(name);
+    wrap.appendChild(row);
+  }
+}
+
 const settings = document.getElementById("settings");
 document.getElementById("btn-settings").onclick = () => {
   document.getElementById("copilot-token").value = "";
   document.getElementById("openrouter-key").value = "";
   document.getElementById("gemini-key").value = "";
   document.getElementById("http-proxy").value = "";
+  renderProviderList();
   settings.classList.add("open");
 };
 document.getElementById("btn-settings-close").onclick = () =>

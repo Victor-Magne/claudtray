@@ -11,8 +11,8 @@ use zeroize::Zeroize;
 /// each (provider, window) pair.
 ///
 /// The credential fields (`copilot_token`, `openrouter_key`, `gemini_key`,
-/// `http_proxy`) are encrypted with Windows DPAPI on disk (see the [`secret`]
-/// serde module) and zeroized in memory when replaced or dropped, so secrets
+/// `http_proxy`) are encrypted on disk (DPAPI on Windows, ChaCha20-Poly1305 on
+/// Linux — see `crate::secret`) and zeroized in memory when replaced or dropped, so secrets
 /// are never written in plaintext nor left lingering in freed heap memory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppState {
@@ -22,6 +22,11 @@ pub struct AppState {
     /// Observed peak usage keyed by "<provider_id>:<window_key>".
     #[serde(default)]
     pub observed_max: HashMap<String, u64>,
+
+    /// Provider ids the user hid from the dashboard. Hidden providers are not
+    /// collected at all (no API calls) and don't drive the tray icon/alerts.
+    #[serde(default)]
+    pub disabled_providers: Vec<String>,
 
     #[serde(with = "secret", default)]
     pub copilot_token: Option<String>,
@@ -56,6 +61,7 @@ impl Default for AppState {
         Self {
             theme: default_theme(),
             observed_max: HashMap::new(),
+            disabled_providers: Vec::new(),
             copilot_token: None,
             openrouter_key: None,
             gemini_key: None,
@@ -122,9 +128,9 @@ impl Drop for AppState {
     }
 }
 
-/// Serde adapter that transparently encrypts credential fields with Windows
-/// DPAPI on disk and decrypts them on load. Legacy plaintext values written by
-/// older builds are still read (migration), then re-encrypted on the next save.
+/// Serde adapter that transparently encrypts credential fields on disk and
+/// decrypts them on load (see `crate::secret`). Legacy plaintext values written
+/// by older builds are still read (migration), then re-encrypted on the next save.
 mod secret {
     use serde::{Deserialize, Deserializer, Serializer};
 
@@ -134,9 +140,9 @@ mod secret {
     {
         match value {
             None => s.serialize_none(),
-            Some(plain) => match crate::dpapi::protect(plain.as_bytes()) {
-                Some(blob) => s.serialize_some(&crate::dpapi::to_hex(&blob)),
-                // If DPAPI is unavailable, never fall back to plaintext on disk.
+            Some(plain) => match crate::secret::protect(plain.as_bytes()) {
+                Some(blob) => s.serialize_some(&crate::secret::to_hex(&blob)),
+                // If encryption is unavailable, never fall back to plaintext on disk.
                 None => s.serialize_none(),
             },
         }
@@ -148,14 +154,14 @@ mod secret {
     {
         let stored = Option::<String>::deserialize(d)?;
         Ok(stored.map(|s| {
-            if let Some(blob) = crate::dpapi::from_hex(&s) {
-                if let Some(plain) = crate::dpapi::unprotect(&blob) {
+            if let Some(blob) = crate::secret::from_hex(&s) {
+                if let Some(plain) = crate::secret::unprotect(&blob) {
                     if let Ok(txt) = String::from_utf8(plain) {
                         return txt;
                     }
                 }
             }
-            // Not a DPAPI blob → legacy plaintext; keep it (re-encrypted on save).
+            // Not an encrypted blob → legacy plaintext; keep it (re-encrypted on save).
             s
         }))
     }

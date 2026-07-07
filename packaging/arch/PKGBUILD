@@ -1,0 +1,40 @@
+# Maintainer: Victor Gomes <victorgomes20080301@gmail.com>
+pkgname=claudtray
+pkgver=1.2.0
+pkgrel=1
+pkgdesc="Real-time AI usage monitor (Claude Code, Copilot, Codex) in the system tray"
+arch=('x86_64')
+url="https://github.com/Victor-Magne/claudtray"
+license=('MIT')
+options=('!lto')
+depends=('gtk3' 'webkit2gtk-4.1' 'gtk-layer-shell')
+makedepends=('cargo')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP') # preencher no release: sha256sum do tarball da tag
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo test --frozen --release
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+  install -Dm644 "packaging/arch/$pkgname.desktop" "$pkgdir/usr/share/applications/$pkgname.desktop"
+  install -Dm644 "packaging/arch/$pkgname.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/$pkgname.png"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

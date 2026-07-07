@@ -1,10 +1,16 @@
 use crate::model::Snapshot;
 use tao::dpi::{LogicalSize, PhysicalPosition};
 use tao::event_loop::{EventLoopProxy, EventLoopWindowTarget};
+#[cfg(windows)]
 use tao::platform::windows::{WindowBuilderExtWindows, WindowExtWindows};
+#[cfg(target_os = "linux")]
+use tao::platform::unix::{WindowBuilderExtUnix, WindowExtUnix};
 use tao::window::{Theme, Window, WindowBuilder};
+#[cfg(windows)]
 use window_vibrancy::apply_mica;
 use wry::{WebContext, WebView, WebViewBuilder};
+#[cfg(target_os = "linux")]
+use wry::WebViewBuilderExtUnix;
 use serde_json;
 
 
@@ -45,16 +51,28 @@ pub enum IpcMessage {
     SetOpenRouterKey(String),
     SetGeminiKey(String),
     SetHttpProxy(String),
+    /// Provider ids the user unchecked in settings (hidden from the dashboard).
+    SetDisabledProviders(Vec<String>),
     /// Open a whitelisted external URL in the default browser.
     OpenUrl(String),
 }
 
 fn build_html() -> String {
     let html = include_str!("ui/dashboard.html");
-    let css = include_str!("ui/dashboard.css");
+    #[cfg(not(target_os = "linux"))]
+    let css = include_str!("ui/dashboard.css").to_string();
+    // Linux: the translucent theme backgrounds assume a Mica backdrop behind
+    // the window, which doesn't exist here — whatever is under the popover
+    // bleeds through (unreadable in light mode). Make them near-opaque.
+    #[cfg(target_os = "linux")]
+    let css = format!(
+        "{}\n:root {{ --app-bg: rgba(28, 33, 38, 0.98); --overlay: rgba(28, 33, 38, 0.99); }}\n\
+         html[data-theme=\"light\"] {{ --app-bg: rgba(244, 244, 247, 0.99); --overlay: rgba(243, 243, 243, 0.99); }}\n",
+        include_str!("ui/dashboard.css")
+    );
     let js = include_str!("ui/dashboard.js");
     let nonce = csp_nonce();
-    html.replace("__CLAUDTRAY_CSS__", css)
+    html.replace("__CLAUDTRAY_CSS__", &css)
         .replace("__CLAUDTRAY_JS__", js)
         .replace("__CLAUDTRAY_NONCE__", &nonce)
 }
@@ -122,6 +140,15 @@ fn parse_ipc(body: &str) -> Option<IpcMessage> {
             let proxy = v.get("proxy")?.as_str()?.to_string();
             Some(IpcMessage::SetHttpProxy(proxy))
         }
+        "setProviders" => {
+            let disabled = v
+                .get("disabled")?
+                .as_array()?
+                .iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect();
+            Some(IpcMessage::SetDisabledProviders(disabled))
+        }
         "openUrl" => {
             let target = v.get("target")?.as_str()?.to_string();
             Some(IpcMessage::OpenUrl(target))
@@ -142,6 +169,10 @@ pub struct Dashboard {
     /// True while the underlying window (and its HWND) is valid. Cleared on drop
     /// so background tray-notification threads don't touch a dangling HWND.
     alive: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Linux/Wayland: whether the window became a layer-shell surface (DMS-style
+    /// popout). When true the compositor anchors it; manual positioning is a no-op.
+    #[cfg(target_os = "linux")]
+    layer_shell: bool,
 }
 
 impl Dashboard {
@@ -166,12 +197,22 @@ impl Dashboard {
         // Windows theme (queried from the freshly-built window); otherwise honour
         // the explicit preference. We never call `with_theme`, so the window keeps
         // reporting the OS theme and `WindowEvent::ThemeChanged` keeps firing.
-        let dark = match theme_pref {
-            "light" => false,
-            "dark" => true,
-            _ => window.theme() == Theme::Dark,
-        };
-        let _ = apply_mica(&window, Some(dark));
+        #[cfg(windows)]
+        {
+            let dark = match theme_pref {
+                "light" => false,
+                "dark" => true,
+                _ => window.theme() == Theme::Dark,
+            };
+            let _ = apply_mica(&window, Some(dark));
+        }
+        #[cfg(not(windows))]
+        let _ = theme_pref;
+
+        // Wayland: turn the window into a layer-shell surface so it behaves like
+        // a shell popout (DMS/quickshell style) instead of a regular toplevel.
+        #[cfg(target_os = "linux")]
+        let layer_shell = init_layer_shell(&window);
 
         // Store WebView2 cache in %APPDATA%\ClaudTray\WebView2 so the app can
         // run from Program Files (read-only) without write-permission panics.
@@ -179,15 +220,21 @@ impl Dashboard {
             .map(|d| d.join("ClaudTray").join("WebView2"));
         let mut context = WebContext::new(webview_data_dir);
 
-        let webview = WebViewBuilder::new_with_web_context(&mut context)
+        let builder = WebViewBuilder::new_with_web_context(&mut context)
             .with_transparent(true)
             .with_html(build_html())
             .with_ipc_handler(move |req| {
                 if let Some(msg) = parse_ipc(req.body()) {
                     let _ = proxy.send_event(UserEvent::Ipc(msg));
                 }
-            })
-            .build(&window)
+            });
+        #[cfg(not(target_os = "linux"))]
+        let webview = builder.build(&window).expect("falha ao criar o webview");
+        // Linux: wry must attach to the gtk container (the raw window handle is
+        // not available for unmapped GTK/Wayland windows).
+        #[cfg(target_os = "linux")]
+        let webview = builder
+            .build_gtk(window.default_vbox().expect("janela gtk sem vbox"))
             .expect("falha ao criar o webview");
 
         Self {
@@ -196,6 +243,8 @@ impl Dashboard {
             window,
             visible: false,
             alive: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            #[cfg(target_os = "linux")]
+            layer_shell,
         }
     }
 
@@ -218,12 +267,26 @@ impl Dashboard {
         self.visible
     }
 
+    #[cfg(windows)]
     pub fn hwnd(&self) -> isize {
         self.window.hwnd() as isize
     }
 
+    /// No HWND on this platform; notifications go through D-Bus and ignore it.
+    #[cfg(not(windows))]
+    pub fn hwnd(&self) -> isize {
+        0
+    }
+
     pub fn show(&mut self) {
+        #[cfg(windows)]
         self.position_bottom_right();
+        // Layer-shell surfaces are anchored by the compositor; only position
+        // manually when running as a plain window (e.g. X11).
+        #[cfg(target_os = "linux")]
+        if !self.layer_shell {
+            self.position_bottom_right();
+        }
         self.window.set_visible(true);
         self.window.set_focus();
         // Give the webview real keyboard focus so it receives Esc and fires
@@ -237,9 +300,13 @@ impl Dashboard {
         self.visible = false;
     }
 
-    /// Re-apply the Mica backdrop tint when the theme changes.
+    /// Re-apply the Mica backdrop tint when the theme changes. On Linux the
+    /// backdrop is plain CSS in the webview, so there is nothing to retint.
     pub fn set_dark(&self, dark: bool) {
+        #[cfg(windows)]
         let _ = apply_mica(&self.window, Some(dark));
+        #[cfg(not(windows))]
+        let _ = dark;
     }
 
     /// The current Windows app theme (drives "system" mode).
@@ -272,6 +339,37 @@ impl Dashboard {
         self.window
             .set_outer_position(PhysicalPosition::new(x.max(mpos.x), y.max(mpos.y)));
     }
+}
+
+/// Wayland: promote the tao window to a wlr-layer-shell surface so compositors
+/// (Hyprland, niri, …) treat it like a shell popout — always above tiled
+/// windows, anchored to the screen edge next to the DMS bar, never tiled or
+/// given decorations. Returns false when layer-shell is unavailable (X11 or an
+/// unsupported compositor), in which case the window stays a normal toplevel.
+///
+/// Must run after the gtk window is created but before it is first mapped
+/// (the window is built with `with_visible(false)`, so this holds).
+#[cfg(target_os = "linux")]
+fn init_layer_shell(window: &Window) -> bool {
+    use gtk_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+
+    if !gtk_layer_shell::is_supported() {
+        return false;
+    }
+    let gtk_window = window.gtk_window();
+    gtk_window.init_layer_shell();
+    gtk_window.set_layer(Layer::Overlay);
+    gtk_window.set_namespace("claudtray");
+    // Anchor next to the DMS bar (top of the screen by default), mirroring the
+    // bottom-right flyout position used on Windows.
+    gtk_window.set_anchor(Edge::Top, true);
+    gtk_window.set_anchor(Edge::Right, true);
+    gtk_window.set_layer_shell_margin(Edge::Top, 12);
+    gtk_window.set_layer_shell_margin(Edge::Right, 12);
+    // OnDemand: the surface takes keyboard focus while open (Esc-to-close, the
+    // token input fields) and releases it on click-away.
+    gtk_window.set_keyboard_mode(KeyboardMode::OnDemand);
+    true
 }
 
 impl Drop for Dashboard {

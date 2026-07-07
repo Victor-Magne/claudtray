@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ClaudTray
+GenericName=AI Usage Monitor
+Comment=Monitor de quotas de IA (Claude, Copilot, Codex) na system tray
+Exec=claudtray
+Icon=claudtray
+Terminal=false
+Categories=Utility;Monitor;
+Keywords=claude;ai;usage;quota;tray;
+StartupNotify=false

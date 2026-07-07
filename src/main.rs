@@ -3,24 +3,31 @@
 // CLAUDTRAY_DUMP debug path writes to a file, so it needs no console either.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(windows)]
 mod dpapi;
 mod model;
 mod monitor;
 mod notification;
 mod providers;
 mod renderer;
+mod secret;
 mod state;
+#[cfg(target_os = "linux")]
+mod tray_linux;
 mod window;
 
 use model::{Snapshot, Status};
 use monitor::QuotaMonitor;
+#[cfg(windows)]
 use renderer::generate_dynamic_icon;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tao::event::Event;
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
+#[cfg(windows)]
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+#[cfg(windows)]
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use window::{Dashboard, IpcMessage, UserEvent};
 
@@ -42,6 +49,17 @@ async fn main() {
         return;
     }
 
+    // Single instance per session: the lock is held (and auto-released by the
+    // OS on exit/crash) for the app's whole lifetime. A second launch exits at
+    // once instead of registering a duplicate tray icon.
+    let _instance_lock = match acquire_instance_lock() {
+        Ok(lock) => lock,
+        Err(()) => {
+            eprintln!("ClaudTray já está em execução nesta sessão.");
+            return;
+        }
+    };
+
     // Local mirror of the persisted theme preference ("dark" | "light" |
     // "system"). Kept in sync on SetTheme so the OS-theme-change handler knows
     // whether it should react.
@@ -49,19 +67,25 @@ async fn main() {
     let mut last: Option<Snapshot> = monitor.lock().unwrap().state.last_snapshot.clone();
 
     // --- Tray menu (fallback controls) ---
+    #[cfg(windows)]
     let tray_menu = Menu::new();
-    let show_item = MenuItem::new("Mostrar painel", true, None);
-    let refresh_item = MenuItem::new("Atualizar", true, None);
-    let exit_item = MenuItem::new("Sair", true, None);
-    let _ = tray_menu.append_items(&[
-        &show_item,
-        &refresh_item,
-        &PredefinedMenuItem::separator(),
-        &exit_item,
-    ]);
-    let show_id = show_item.id().clone();
-    let refresh_id = refresh_item.id().clone();
-    let exit_id = exit_item.id().clone();
+    #[cfg(windows)]
+    let (show_id, refresh_id, exit_id) = {
+        let show_item = MenuItem::new("Mostrar painel", true, None);
+        let refresh_item = MenuItem::new("Atualizar", true, None);
+        let exit_item = MenuItem::new("Sair", true, None);
+        let _ = tray_menu.append_items(&[
+            &show_item,
+            &refresh_item,
+            &PredefinedMenuItem::separator(),
+            &exit_item,
+        ]);
+        (
+            show_item.id().clone(),
+            refresh_item.id().clone(),
+            exit_item.id().clone(),
+        )
+    };
 
     let initial_status = last.as_ref().map(|s| s.worst_status()).unwrap_or(Status::Healthy);
     let initial_tooltip = last.as_ref().map(|s| tooltip(s)).unwrap_or_else(|| "ClaudTray — a carregar…".to_string());
@@ -74,6 +98,7 @@ async fn main() {
         .checked_sub(Duration::from_secs(3600))
         .unwrap_or_else(Instant::now);
 
+    #[cfg(windows)]
     let icon = Icon::from_rgba(generate_dynamic_icon(initial_status), 64, 64)
         .expect("ícone RGBA inválido");
     // Attach the context menu to the tray and let tray-icon show it natively on
@@ -81,6 +106,7 @@ async fn main() {
     // dance for us, so the menu pops up at the cursor and dismisses cleanly on
     // click-away. Left-click is kept menu-free so we can use it to toggle the
     // dashboard ourselves.
+    #[cfg(windows)]
     let mut tray: Option<TrayIcon> = Some(
         TrayIconBuilder::new()
             .with_tooltip(initial_tooltip)
@@ -91,12 +117,18 @@ async fn main() {
             .expect("falha ao criar o tray icon"),
     );
 
+    // Linux: ksni serves the StatusNotifierItem + dbusmenu over D-Bus; clicks
+    // and menu picks arrive as UserEvents through the same proxy (tray_linux.rs).
+    #[cfg(target_os = "linux")]
+    let tray = tray_linux::spawn(proxy.clone(), initial_status, initial_tooltip).await;
+
     // Forward tray + menu events into the event loop through the proxy. The
     // crate's default global channels are only drained when the loop happens to
     // wake for some other reason (an IPC message or the 5–60 s ticker), which
     // made clicks feel laggy and could replay the menu; routing each event
     // through `EventLoopProxy` wakes the loop at once and handles it exactly
     // once. This replaces `TrayIconEvent::receiver()` / `MenuEvent::receiver()`.
+    #[cfg(windows)]
     {
         let tray_proxy = proxy.clone();
         TrayIconEvent::set_event_handler(Some(move |event| {
@@ -190,7 +222,12 @@ async fn main() {
                     last_alert = Instant::now();
                 }
                 prev_status = worst;
+                #[cfg(windows)]
                 update_tray(&mut tray, &snap);
+                #[cfg(target_os = "linux")]
+                if let Some(handle) = &tray {
+                    tray_linux::update(handle, worst, tooltip(&snap));
+                }
                 dashboard.push(&snap);
                 last = Some(snap);
             }
@@ -219,7 +256,13 @@ async fn main() {
             }
             Event::UserEvent(UserEvent::MenuRefresh) => spawn_refresh(&monitor, &proxy),
             Event::UserEvent(UserEvent::MenuExit) => {
+                #[cfg(windows)]
                 tray.take();
+                #[cfg(target_os = "linux")]
+                if let Some(handle) = &tray {
+                    let handle = handle.clone();
+                    tokio::spawn(async move { handle.shutdown().await });
+                }
                 *control_flow = ControlFlow::Exit;
             }
             Event::UserEvent(UserEvent::Ipc(msg)) => match msg {
@@ -259,6 +302,9 @@ async fn main() {
                 }
                 IpcMessage::SetHttpProxy(p) => {
                     spawn_set_http_proxy(&monitor, p);
+                }
+                IpcMessage::SetDisabledProviders(ids) => {
+                    spawn_set_disabled_providers(&monitor, &proxy, ids);
                 }
                 IpcMessage::OpenUrl(target) => {
                     open_url(&target);
@@ -368,7 +414,31 @@ fn spawn_set_token(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>, t
     });
 }
 
+/// Guard a single instance per user session. Returns the held lock file on
+/// success (kept alive for the process lifetime; the OS releases it on exit or
+/// crash) and `Err(())` when another instance already holds it. If the lock
+/// infrastructure itself is unavailable, startup proceeds unguarded.
+fn acquire_instance_lock() -> Result<Option<std::fs::File>, ()> {
+    // Linux: XDG_RUNTIME_DIR is per-session and wiped on logout. Windows/other:
+    // the per-user temp dir.
+    let dir = dirs::runtime_dir().unwrap_or_else(std::env::temp_dir);
+    let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(dir.join("claudtray.lock"))
+    else {
+        return Ok(None);
+    };
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Err(()),
+        Err(_) => Ok(None),
+    }
+}
+
 /// Refresh the tray icon colour + tooltip from the latest snapshot.
+#[cfg(windows)]
 fn update_tray(tray: &mut Option<TrayIcon>, snap: &Snapshot) {
     let Some(t) = tray else {
         return;
@@ -405,6 +475,25 @@ fn spawn_set_gemini_key(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEven
     });
 }
 
+/// Persist the hidden-provider list and refresh so the dashboard, tray icon
+/// and alerts all reflect the new selection at once.
+fn spawn_set_disabled_providers(
+    monitor: &SharedMonitor,
+    proxy: &EventLoopProxy<UserEvent>,
+    ids: Vec<String>,
+) {
+    let monitor = Arc::clone(monitor);
+    let proxy = proxy.clone();
+    std::thread::spawn(move || {
+        let snapshot = {
+            let mut guard = monitor.lock().unwrap();
+            guard.set_disabled_providers(ids);
+            guard.refresh()
+        };
+        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+    });
+}
+
 fn spawn_set_http_proxy(monitor: &SharedMonitor, proxy_url: String) {
     let monitor = Arc::clone(monitor);
     std::thread::spawn(move || {
@@ -412,7 +501,8 @@ fn spawn_set_http_proxy(monitor: &SharedMonitor, proxy_url: String) {
     });
 }
 
-/// Open a whitelisted URL in the default browser via cmd /c start.
+/// Open a whitelisted URL in the default browser (cmd /c start on Windows,
+/// xdg-open on Linux).
 fn open_url(target: &str) {
     let url = match target {
         "github-tokens"  => "https://github.com/settings/tokens",
@@ -420,9 +510,12 @@ fn open_url(target: &str) {
         "gemini-keys"    => "https://aistudio.google.com/app/apikey",
         _ => return,
     };
+    #[cfg(windows)]
     let _ = std::process::Command::new("cmd")
         .args(["/c", "start", "", url])
         .spawn();
+    #[cfg(target_os = "linux")]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
 
 /// Build the title + body for a critical/depleted alert notification.

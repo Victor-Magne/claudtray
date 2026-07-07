@@ -1,8 +1,13 @@
+#[cfg(windows)]
 use std::ffi::OsStr;
+#[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
+#[cfg(windows)]
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+#[cfg(windows)]
 fn wide(s: &str, buf: &mut [u16]) {
     let v: Vec<u16> = OsStr::new(s)
         .encode_wide()
@@ -21,6 +26,7 @@ fn wide(s: &str, buf: &mut [u16]) {
 /// destroyed within the 8-second window (e.g. the user quits the app), the flag
 /// flips to `false` and we skip the call — avoiding a `Shell_NotifyIconW` on a
 /// dangling `HWND`, which is undefined behaviour at the Win32 level.
+#[cfg(windows)]
 pub fn show_alert(hwnd: isize, alive: Arc<AtomicBool>, title: &str, body: &str) {
     use winapi::shared::windef::HWND;
     use winapi::um::shellapi::{
@@ -51,4 +57,23 @@ pub fn show_alert(hwnd: isize, alive: Arc<AtomicBool>, title: &str, body: &str) 
             Shell_NotifyIconW(NIM_DELETE, &mut del);
         });
     }
+}
+
+/// Show a desktop notification via D-Bus (`org.freedesktop.Notifications`).
+/// Rendered by whatever notification daemon is running — on DankMaterialShell
+/// that's the DMS notification popup. `hwnd`/`alive` are Windows-only concepts
+/// and ignored here; the daemon owns the popup's lifecycle.
+#[cfg(target_os = "linux")]
+pub fn show_alert(_hwnd: isize, _alive: Arc<AtomicBool>, title: &str, body: &str) {
+    let (title, body) = (title.to_string(), body.to_string());
+    // notify-rust blocks on the D-Bus round-trip; keep it off the UI thread.
+    std::thread::spawn(move || {
+        let _ = notify_rust::Notification::new()
+            .appname("ClaudTray")
+            .summary(&title)
+            .body(&body)
+            .icon("dialog-information")
+            .timeout(notify_rust::Timeout::Milliseconds(5000))
+            .show();
+    });
 }

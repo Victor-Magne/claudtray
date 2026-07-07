@@ -431,3 +431,23 @@ footer .spacer {
     transform: rotate(360deg);
   }
 }
+
+/* Provider visibility checkboxes (settings) */
+.provider-list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
+}
+.provider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--fg);
+  cursor: pointer;
+  user-select: none;
+}
+.provider-row input {
+  accent-color: #4cc2ff;
+  cursor: pointer;
+}

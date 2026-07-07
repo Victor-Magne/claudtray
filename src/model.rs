@@ -142,6 +142,15 @@ impl ProviderSnapshot {
     }
 }
 
+/// One entry of the full provider catalog (settings checkboxes) — present even
+/// for providers hidden from the dashboard.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderInfo {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+}
+
 /// The full picture pushed to the dashboard on every refresh.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
@@ -149,7 +158,11 @@ pub struct Snapshot {
     pub updated_at: String,
     /// Active theme: "dark" | "light" | "system".
     pub theme: String,
+    /// Only the providers the user kept visible (see [`ProviderInfo`]).
     pub providers: Vec<ProviderSnapshot>,
+    /// Every known provider + whether it's shown, for the settings panel.
+    #[serde(default)]
+    pub catalog: Vec<ProviderInfo>,
     /// Sparkline history: "provider_id:window_key" → oldest-first Vec of remaining_pct.
     #[serde(default)]
     pub history: HashMap<String, Vec<u32>>,
