@@ -10,7 +10,7 @@ options=('!lto')
 depends=('gtk3' 'webkit2gtk-4.1' 'gtk-layer-shell')
 makedepends=('cargo')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP') # preencher no release: sha256sum do tarball da tag
+sha256sums=('7b66d6211d7319a92a646a4f3a810c0fa41ffe1fd6da9dc80daf9d9df0c60b49')
 
 prepare() {
   cd "$pkgname-$pkgver"
