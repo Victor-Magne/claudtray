@@ -63,17 +63,18 @@ Download `ClaudTray_Setup_<version>.exe` from the [Releases page](https://github
 - Optionally adds ClaudTray to Windows startup
 - Automatically installs the WebView2 Runtime if it is missing (Windows 10 only — Windows 11 ships with it)
 
-### Option 4 — Arch Linux (AUR)
+### Option 4 — Arch Linux (manual package)
+
+Build and install a pacman-managed package from the release tarball using the PKGBUILD shipped in this repo:
 
 ```bash
-yay -S claudtray   # or: paru -S claudtray
+curl -LO https://raw.githubusercontent.com/Victor-Magne/claudtray/master/packaging/arch/PKGBUILD
+makepkg -si   # fetches the release tarball, builds and installs
 ```
 
 Runtime dependencies: `gtk3`, `webkit2gtk-4.1`, `gtk-layer-shell` (pulled in automatically). The tray icon needs a StatusNotifier host — KDE and most bars (Waybar, DankMaterialShell, …) have one; on GNOME install the AppIndicator extension.
 
-### Option 5 — Build from source
-
-See [Building from source](#building-from-source) below.
+Alternatively, build manually from source — see [Building from source](#building-from-source) below.
 
 ---
 
@@ -196,7 +197,7 @@ After each release, update the version and SHA256 in:
 
 - `packaging/winget/VictorMagne.ClaudTray.installer.yaml` → submit PR to [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs)
 - `packaging/scoop/claudtray.json` → push to your Scoop bucket repo
-- `packaging/arch/PKGBUILD` (`pkgver` + `sha256sums` of the tag tarball) → regenerate `.SRCINFO` (`makepkg --printsrcinfo > .SRCINFO`) and push to the AUR
+- `packaging/arch/PKGBUILD` — bump `pkgver` and refresh `sha256sums` with the hash of the new tag tarball
 
 The SHA256 of the Windows installers is printed in the GitHub release notes.
 
