@@ -31,7 +31,7 @@ ureq = "3.3.0"
 zeroize = "1"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["shellapi", "winuser", "dpapi", "wincrypt", "winbase", "minwindef"] }
+winapi = { version = "0.3", features = ["shellapi", "winuser", "dpapi", "wincrypt", "winbase", "minwindef", "winnls"] }
 window-vibrancy = "0.7.1"
 # Linux usa ksni (o backend appindicator do tray-icon não entrega cliques)
 tray-icon = "0.19"

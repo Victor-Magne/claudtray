@@ -12,7 +12,7 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-AppComments=Monitor de uso de assistentes de IA (Claude, Codex, Antigravity, Copilot)
+AppComments=Real-time AI assistant usage monitor (Claude, Codex, Antigravity, Copilot)
 
 ; Machine-wide install in 64-bit Program Files — requires admin elevation
 DefaultDirName={commonpf64}\{#MyAppName}
@@ -25,6 +25,11 @@ DisableProgramGroupPage=yes
 DisableDirPage=no
 WizardStyle=modern
 
+; "auto" picks the matching language silently when Windows' UI language is
+; English or Portuguese (see [Languages] below), and only shows the picker
+; dialog for any other OS language.
+ShowLanguageDialog=auto
+
 ; Output
 OutputDir=.\installer_output
 OutputBaseFilename=ClaudTray
@@ -36,9 +41,34 @@ SetupIconFile=assets\claudtray.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 
+[Languages]
+; First entry is the fallback.
+Name: "en"; MessagesFile: "compiler:Default.isl"
+Name: "pt"; MessagesFile: "compiler:Languages\Portuguese.isl"
+
 [Messages]
-WelcomeLabel2=Bem-vindo ao instalador do [name]!%n%nEste programa monitoriza o uso de assistentes de IA (Claude Code, Codex, Antigravity, GitHub Copilot) em tempo real na barra de tarefas do Windows.%n%nClica em Seguinte para continuar.
-FinishedLabel=A instalação do [name] está concluída.%n%nPodes iniciá-lo a qualquer momento pelo Menu Iniciar ou procurando por "ClaudTray".
+en.WelcomeLabel2=Welcome to the [name] installer!%n%nThis program monitors AI assistant usage (Claude Code, Codex, Antigravity, GitHub Copilot) in real time from the Windows system tray.%n%nClick Next to continue.
+pt.WelcomeLabel2=Bem-vindo ao instalador do [name]!%n%nEste programa monitoriza o uso de assistentes de IA (Claude Code, Codex, Antigravity, GitHub Copilot) em tempo real na barra de tarefas do Windows.%n%nClica em Seguinte para continuar.
+en.FinishedLabel=Setup has finished installing [name] on your computer.%n%nYou can launch it at any time from the Start Menu or by searching for "ClaudTray".
+pt.FinishedLabel=A instalação do [name] está concluída.%n%nPodes iniciá-lo a qualquer momento pelo Menu Iniciar ou procurando por "ClaudTray".
+
+[CustomMessages]
+en.IconComment=Real-time AI usage monitor
+pt.IconComment=Monitor de uso de IA em tempo real
+en.StartupTaskDescription=Launch {#MyAppName} automatically with Windows
+pt.StartupTaskDescription=Iniciar {#MyAppName} automaticamente com o Windows
+en.StartupTaskGroup=Additional options:
+pt.StartupTaskGroup=Opções adicionais:
+en.LaunchNow=Launch {#MyAppName} now
+pt.LaunchNow=Lançar {#MyAppName} agora
+en.MsgReinstallConfirm=ClaudTray %1 is already installed.%n%nDo you want to reinstall the same version?
+pt.MsgReinstallConfirm=O ClaudTray %1 já está instalado.%n%nDeseja reinstalar a mesma versão?
+en.MsgUpgradeConfirm=ClaudTray %1 is installed.%n%nDo you want to upgrade to version %2?
+pt.MsgUpgradeConfirm=O ClaudTray %1 está instalado.%n%nDeseja atualizar para a versão %2?
+en.MsgDowngradeConfirm=ClaudTray %1 is installed and is newer than this version (%2).%n%nDo you really want to install the older version anyway?
+pt.MsgDowngradeConfirm=O ClaudTray %1 está instalado e é mais recente do que esta versão (%2).%n%nDeseja mesmo assim instalar a versão mais antiga?
+en.MsgWebView2Fail=Could not install the WebView2 Runtime automatically.%nInstall it manually from: https://aka.ms/webview2
+pt.MsgWebView2Fail=Não foi possível instalar o WebView2 Runtime automaticamente.%nInstala manualmente em: https://aka.ms/webview2
 
 [Files]
 ; App executable (CRT statically linked — no MSVC Redist needed)
@@ -56,12 +86,12 @@ Source: "assets\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; \
 ; Start Menu — searchable via Windows Search
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; \
   IconFilename: "{app}\claudtray.ico"; \
-  Comment: "Monitor de uso de IA em tempo real"
-Name: "{group}\Desinstalar {#MyAppName}"; Filename: "{uninstallexe}"
+  Comment: "{cm:IconComment}"
+Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
 
 [Tasks]
-Name: "startup"; Description: "Iniciar {#MyAppName} automaticamente com o Windows"; \
-  GroupDescription: "Opções adicionais:"; Flags: unchecked
+Name: "startup"; Description: "{cm:StartupTaskDescription}"; \
+  GroupDescription: "{cm:StartupTaskGroup}"; Flags: unchecked
 
 [Code]
 
@@ -126,19 +156,16 @@ begin
 
   if Cmp = 0 then begin
     Result := MsgBox(
-      'O ClaudTray ' + InstalledVer + ' já está instalado.' + #13#10 + #13#10 +
-      'Deseja reinstalar a mesma versão?',
+      Format(CustomMessage('MsgReinstallConfirm'), [InstalledVer]),
       mbConfirmation, MB_YESNO) = IDYES;
   end else if Cmp > 0 then begin
     Result := MsgBox(
-      'O ClaudTray ' + InstalledVer + ' está instalado.' + #13#10 + #13#10 +
-      'Deseja atualizar para a versão {#MyAppVersion}?',
+      Format(CustomMessage('MsgUpgradeConfirm'), [InstalledVer, '{#MyAppVersion}']),
       mbConfirmation, MB_YESNO) = IDYES;
   end else begin
-    // Downgrade: versão instalada é mais recente
+    // Downgrade: the installed version is newer than this one.
     Result := MsgBox(
-      'O ClaudTray ' + InstalledVer + ' está instalado e é mais recente do que esta versão ({#MyAppVersion}).' + #13#10 + #13#10 +
-      'Deseja mesmo assim instalar a versão mais antiga?',
+      Format(CustomMessage('MsgDowngradeConfirm'), [InstalledVer, '{#MyAppVersion}']),
       mbConfirmation, MB_YESNO) = IDYES;
   end;
 end;
@@ -204,10 +231,7 @@ begin
   ExtractTemporaryFile('MicrosoftEdgeWebview2Setup.exe');
   SetupPath := ExpandConstant('{tmp}\MicrosoftEdgeWebview2Setup.exe');
   if not Exec(SetupPath, '/silent /install', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
-    MsgBox(
-      'Não foi possível instalar o WebView2 Runtime automaticamente.' + #13#10 +
-      'Instala manualmente em: https://aka.ms/webview2',
-      mbError, MB_OK);
+    MsgBox(CustomMessage('MsgWebView2Fail'), mbError, MB_OK);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -238,6 +262,6 @@ end;
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; \
-  Description: "Lançar {#MyAppName} agora"; \
+  Description: "{cm:LaunchNow}"; \
   Flags: nowait postinstall skipifsilent
 

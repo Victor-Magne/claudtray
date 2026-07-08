@@ -1,3 +1,4 @@
+use crate::i18n::Lang;
 use crate::model::{ProviderInfo, ProviderSnapshot, Snapshot, UsagePoint};
 use crate::providers;
 use crate::state::AppState;
@@ -137,6 +138,8 @@ impl QuotaMonitor {
         let snapshot = Snapshot {
             updated_at: Local::now().to_rfc3339(),
             theme: self.state.theme.clone(),
+            language: self.state.language.clone(),
+            resolved_language: Lang::from_pref(&self.state.language).code().to_string(),
             providers: snaps,
             catalog,
             history: history_map,
@@ -163,6 +166,15 @@ impl QuotaMonitor {
         self.state.save();
         if let Some(s) = self.last.as_mut() {
             s.theme = theme.to_string();
+        }
+    }
+
+    pub fn set_language(&mut self, language: &str) {
+        self.state.language = language.to_string();
+        self.state.save();
+        if let Some(s) = self.last.as_mut() {
+            s.language = language.to_string();
+            s.resolved_language = Lang::from_pref(language).code().to_string();
         }
     }
 

@@ -7,6 +7,7 @@
 //! context menu is served over dbusmenu with per-item callbacks — same
 //! behaviour as the Windows tray.
 
+use crate::i18n::{catalog, Lang};
 use crate::model::Status;
 use crate::renderer::generate_dynamic_icon;
 use crate::window::UserEvent;
@@ -18,6 +19,7 @@ pub struct ClaudTray {
     proxy: EventLoopProxy<UserEvent>,
     icon: ksni::Icon,
     tooltip: String,
+    lang: Lang,
 }
 
 /// RGBA (renderer output) → ARGB32 network byte order (SNI wire format).
@@ -58,9 +60,10 @@ impl ksni::Tray for ClaudTray {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
+        let l = catalog(self.lang);
         vec![
             StandardItem {
-                label: "Mostrar painel".into(),
+                label: l.menu_show.into(),
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.proxy.send_event(UserEvent::MenuShow);
                 }),
@@ -68,7 +71,7 @@ impl ksni::Tray for ClaudTray {
             }
             .into(),
             StandardItem {
-                label: "Atualizar".into(),
+                label: l.menu_refresh.into(),
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.proxy.send_event(UserEvent::MenuRefresh);
                 }),
@@ -77,7 +80,7 @@ impl ksni::Tray for ClaudTray {
             .into(),
             MenuItem::Separator,
             StandardItem {
-                label: "Sair".into(),
+                label: l.menu_exit.into(),
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.proxy.send_event(UserEvent::MenuExit);
                 }),
@@ -94,24 +97,28 @@ pub async fn spawn(
     proxy: EventLoopProxy<UserEvent>,
     status: Status,
     tooltip: String,
+    lang: Lang,
 ) -> Option<ksni::Handle<ClaudTray>> {
     let tray = ClaudTray {
         proxy,
         icon: to_ksni_icon(generate_dynamic_icon(status)),
         tooltip,
+        lang,
     };
     tray.spawn().await.ok()
 }
 
-/// Refresh icon colour + tooltip from the UI thread (fire-and-forget task —
+/// Refresh icon colour + tooltip (and, on a language change, the menu labels
+/// picked up on the next open) from the UI thread (fire-and-forget task —
 /// `Handle::update` is async and the event loop closure is not).
-pub fn update(handle: &ksni::Handle<ClaudTray>, status: Status, tooltip: String) {
+pub fn update(handle: &ksni::Handle<ClaudTray>, status: Status, tooltip: String, lang: Lang) {
     let handle = handle.clone();
     tokio::spawn(async move {
         handle
             .update(move |t| {
                 t.icon = to_ksni_icon(generate_dynamic_icon(status));
                 t.tooltip = tooltip;
+                t.lang = lang;
             })
             .await;
     });

@@ -42,6 +42,7 @@ pub enum IpcMessage {
     Ready,
     Refresh,
     SetTheme(String),
+    SetLanguage(String),
     SetClaudeToken(String),
     SetCopilotToken(String),
     Close,
@@ -120,6 +121,10 @@ fn parse_ipc(body: &str) -> Option<IpcMessage> {
         "setTheme" => {
             let theme = v.get("theme")?.as_str()?.to_string();
             Some(IpcMessage::SetTheme(theme))
+        }
+        "setLanguage" => {
+            let language = v.get("language")?.as_str()?.to_string();
+            Some(IpcMessage::SetLanguage(language))
         }
         "setClaudeToken" => {
             let token = v.get("token")?.as_str()?.to_string();

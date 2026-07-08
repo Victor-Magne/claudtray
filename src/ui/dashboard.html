@@ -18,7 +18,7 @@ __CLAUDTRAY_CSS__
         <div class="logo">AI</div>
         <div class="titles">
           <span class="name">ClaudTray</span>
-          <span class="sub">AI Usage Monitor</span>
+          <span class="sub" data-i18n="headerSub">AI Usage Monitor</span>
         </div>
         <div class="spacer"></div>
         <div class="global-pill">
@@ -27,89 +27,98 @@ __CLAUDTRAY_CSS__
         </div>
       </header>
 
-      <div class="updated" id="updated">A carregar…</div>
+      <div class="updated" id="updated" data-i18n="loading">A carregar…</div>
 
       <div class="tabs" id="tabs"></div>
 
       <div class="cards" id="cards"></div>
 
       <footer>
-        <button class="btn" id="btn-refresh">↻ Atualizar</button>
+        <button class="btn" id="btn-refresh" data-i18n="btnRefresh">↻ Atualizar</button>
         <div class="spacer"></div>
-        <button class="btn icon" id="btn-theme" title="Alternar tema">◐</button>
-        <button class="btn icon" id="btn-settings" title="Definições">⚙</button>
-        <button class="btn icon" id="btn-close" title="Fechar">✕</button>
+        <button class="btn icon" id="btn-theme" data-i18n-title="btnThemeTitle" title="Alternar tema">◐</button>
+        <button class="btn icon" id="btn-settings" data-i18n-title="btnSettingsTitle" title="Definições">⚙</button>
+        <button class="btn icon" id="btn-close" data-i18n-title="btnCloseTitle" title="Fechar">✕</button>
       </footer>
     </div>
 
     <!-- Settings overlay -->
     <div class="overlay" id="settings">
-      <h2>Definições</h2>
+      <h2 data-i18n="settingsTitle">Definições</h2>
 
       <div class="field">
-        <label>Tema</label>
+        <label data-i18n="themeLabel">Tema</label>
         <div class="seg" id="theme-seg">
-          <div class="tab" data-theme-value="dark">Escuro</div>
-          <div class="tab" data-theme-value="light">Claro</div>
-          <div class="tab" data-theme-value="system">Sistema</div>
+          <div class="tab" data-theme-value="dark" data-i18n="themeDark">Escuro</div>
+          <div class="tab" data-theme-value="light" data-i18n="themeLight">Claro</div>
+          <div class="tab" data-theme-value="system" data-i18n="themeSystem">Sistema</div>
         </div>
       </div>
 
       <div class="field">
-        <label>Providers no painel</label>
+        <label data-i18n="languageLabel">Idioma</label>
+        <div class="seg" id="language-seg">
+          <div class="tab" data-language-value="system" data-i18n="languageSystem">Automático</div>
+          <div class="tab" data-language-value="pt">Português</div>
+          <div class="tab" data-language-value="en">English</div>
+        </div>
+      </div>
+
+      <div class="field">
+        <label data-i18n="providersLabel">Providers no painel</label>
         <div class="provider-list" id="provider-list"></div>
       </div>
 
       <div class="field">
-        <label>Token Claude — opcional (gera com <code>claude setup-token</code>)</label>
+        <label><span data-i18n="claudeTokenLabel">Token Claude — opcional (gera com</span> <code>claude setup-token</code>)</label>
         <div class="token-row">
           <input id="claude-token" type="password" placeholder="sk-ant-oat01-…" />
-          <button class="btn icon paste-btn" data-target="claude-token" title="Colar">⎘</button>
+          <button class="btn icon paste-btn" data-target="claude-token" data-i18n-title="pasteTitle" title="Colar">⎘</button>
         </div>
       </div>
 
       <div class="field">
         <label>
-          Token GitHub (Copilot) — opcional
-          <button class="link-btn" data-url="github-tokens">Obter ↗</button>
+          <span data-i18n="copilotTokenLabel">Token GitHub (Copilot) — opcional</span>
+          <button class="link-btn" data-url="github-tokens" data-i18n="getLink">Obter ↗</button>
         </label>
         <div class="token-row">
           <input id="copilot-token" type="password" placeholder="ghp_…" />
-          <button class="btn icon" id="btn-paste-token" title="Colar da área de transferência">⎘</button>
+          <button class="btn icon" id="btn-paste-token" data-i18n-title="pasteClipboardTitle" title="Colar da área de transferência">⎘</button>
         </div>
       </div>
 
       <div class="field">
         <label>
-          API Key OpenRouter — opcional
-          <button class="link-btn" data-url="openrouter-keys">Obter ↗</button>
+          <span data-i18n="openrouterLabel">API Key OpenRouter — opcional</span>
+          <button class="link-btn" data-url="openrouter-keys" data-i18n="getLink">Obter ↗</button>
         </label>
         <div class="token-row">
           <input id="openrouter-key" type="password" placeholder="sk-or-…" />
-          <button class="btn icon paste-btn" data-target="openrouter-key" title="Colar">⎘</button>
+          <button class="btn icon paste-btn" data-target="openrouter-key" data-i18n-title="pasteTitle" title="Colar">⎘</button>
         </div>
       </div>
 
       <div class="field">
         <label>
-          API Key Gemini (Google AI Studio) — opcional
-          <button class="link-btn" data-url="gemini-keys">Obter ↗</button>
+          <span data-i18n="geminiLabel">API Key Gemini (Google AI Studio) — opcional</span>
+          <button class="link-btn" data-url="gemini-keys" data-i18n="getLink">Obter ↗</button>
         </label>
         <div class="token-row">
           <input id="gemini-key" type="password" placeholder="AIza…" />
-          <button class="btn icon paste-btn" data-target="gemini-key" title="Colar">⎘</button>
+          <button class="btn icon paste-btn" data-target="gemini-key" data-i18n-title="pasteTitle" title="Colar">⎘</button>
         </div>
       </div>
 
       <div class="field">
-        <label>Proxy HTTP — opcional (ex: http://proxy:8080)</label>
+        <label data-i18n="proxyLabel">Proxy HTTP — opcional (ex: http://proxy:8080)</label>
         <input id="http-proxy" type="text" placeholder="http://…" />
       </div>
 
       <footer>
-        <button class="btn" id="btn-save">Guardar</button>
+        <button class="btn" id="btn-save" data-i18n="btnSave">Guardar</button>
         <div class="spacer"></div>
-        <button class="btn" id="btn-settings-close">Fechar</button>
+        <button class="btn" id="btn-settings-close" data-i18n="btnSettingsClose">Fechar</button>
       </footer>
     </div>
 

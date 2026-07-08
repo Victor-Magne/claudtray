@@ -19,6 +19,12 @@ pub struct AppState {
     #[serde(default = "default_theme")]
     pub theme: String,
 
+    /// UI language preference: "system" | "pt" | "en". "system" resolves
+    /// against the OS locale at runtime (see `crate::i18n`) and is never
+    /// cached, so it tracks a later OS language change.
+    #[serde(default = "default_language")]
+    pub language: String,
+
     /// Observed peak usage keyed by "<provider_id>:<window_key>".
     #[serde(default)]
     pub observed_max: HashMap<String, u64>,
@@ -61,10 +67,15 @@ fn default_theme() -> String {
     "dark".to_string()
 }
 
+fn default_language() -> String {
+    "system".to_string()
+}
+
 impl Default for AppState {
     fn default() -> Self {
         Self {
             theme: default_theme(),
+            language: default_language(),
             observed_max: HashMap::new(),
             disabled_providers: Vec::new(),
             claude_token: None,

@@ -158,6 +158,12 @@ pub struct Snapshot {
     pub updated_at: String,
     /// Active theme: "dark" | "light" | "system".
     pub theme: String,
+    /// Language preference as stored: "system" | "pt" | "en".
+    #[serde(default = "default_language")]
+    pub language: String,
+    /// Language actually in effect (system preference already resolved): "pt" | "en".
+    #[serde(default = "default_resolved_language")]
+    pub resolved_language: String,
     /// Only the providers the user kept visible (see [`ProviderInfo`]).
     pub providers: Vec<ProviderSnapshot>,
     /// Every known provider + whether it's shown, for the settings panel.
@@ -166,6 +172,14 @@ pub struct Snapshot {
     /// Sparkline history: "provider_id:window_key" → oldest-first Vec of remaining_pct.
     #[serde(default)]
     pub history: HashMap<String, Vec<u32>>,
+}
+
+fn default_language() -> String {
+    "system".to_string()
+}
+
+fn default_resolved_language() -> String {
+    "pt".to_string()
 }
 
 impl Snapshot {

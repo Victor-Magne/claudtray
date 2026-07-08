@@ -8,12 +8,125 @@ let themePref = "dark";
 // webview's own prefers-color-scheme) is the source of truth for "system" mode.
 let osThemeDark = true;
 
-const STATUS_LABEL = {
-  healthy: "HEALTHY",
-  warning: "WARNING",
-  critical: "LOW",
-  depleted: "EMPTY",
+// ---- i18n ----
+// `languagePref` mirrors the raw preference ("system"|"pt"|"en") for the
+// settings segmented control; `currentLang` is what Rust actually resolved it
+// to (see Snapshot.resolved_language) and drives every string below.
+let languagePref = "system";
+let currentLang = "pt";
+
+const STRINGS = {
+  pt: {
+    headerSub: "Monitor de Uso de IA",
+    loading: "A carregar…",
+    btnRefresh: "↻ Atualizar",
+    btnRefreshSyncing: "A sincronizar…",
+    btnThemeTitle: "Alternar tema",
+    btnSettingsTitle: "Definições",
+    btnCloseTitle: "Fechar",
+    settingsTitle: "Definições",
+    themeLabel: "Tema",
+    themeDark: "Escuro",
+    themeLight: "Claro",
+    themeSystem: "Sistema",
+    languageLabel: "Idioma",
+    languageSystem: "Automático",
+    providersLabel: "Providers no painel",
+    claudeTokenLabel: "Token Claude — opcional (gera com",
+    pasteTitle: "Colar",
+    copilotTokenLabel: "Token GitHub (Copilot) — opcional",
+    getLink: "Obter ↗",
+    pasteClipboardTitle: "Colar da área de transferência",
+    openrouterLabel: "API Key OpenRouter — opcional",
+    geminiLabel: "API Key Gemini (Google AI Studio) — opcional",
+    proxyLabel: "Proxy HTTP — opcional (ex: http://proxy:8080)",
+    btnSave: "Guardar",
+    btnSettingsClose: "Fechar",
+    statusHealthy: "SAUDÁVEL",
+    statusWarning: "AVISO",
+    statusCritical: "BAIXO",
+    statusDepleted: "ESGOTADO",
+    noDataNote: "Sem dados disponíveis",
+    sessionActive: "SESSÃO ATIVA",
+    tokensSpent: "TOKENS GASTOS (30d)",
+    modelRunning: "A CORRER",
+    modelStopped: "PARADO",
+    resetUnknown: "Reinicia: —",
+    resetsNow: "Reinicia agora",
+    resetsIn: "Reinicia em",
+    justNow: "agora mesmo",
+    updatedPrefix: "Atualizado ",
+    agoSuffix: (n, unit) => `há ${n}${unit}`,
+  },
+  en: {
+    headerSub: "AI Usage Monitor",
+    loading: "Loading…",
+    btnRefresh: "↻ Refresh",
+    btnRefreshSyncing: "Syncing…",
+    btnThemeTitle: "Toggle theme",
+    btnSettingsTitle: "Settings",
+    btnCloseTitle: "Close",
+    settingsTitle: "Settings",
+    themeLabel: "Theme",
+    themeDark: "Dark",
+    themeLight: "Light",
+    themeSystem: "System",
+    languageLabel: "Language",
+    languageSystem: "Automatic",
+    providersLabel: "Providers on dashboard",
+    claudeTokenLabel: "Claude token — optional (generate with",
+    pasteTitle: "Paste",
+    copilotTokenLabel: "GitHub token (Copilot) — optional",
+    getLink: "Get ↗",
+    pasteClipboardTitle: "Paste from clipboard",
+    openrouterLabel: "OpenRouter API key — optional",
+    geminiLabel: "Gemini API key (Google AI Studio) — optional",
+    proxyLabel: "HTTP proxy — optional (e.g. http://proxy:8080)",
+    btnSave: "Save",
+    btnSettingsClose: "Close",
+    statusHealthy: "HEALTHY",
+    statusWarning: "WARNING",
+    statusCritical: "LOW",
+    statusDepleted: "EMPTY",
+    noDataNote: "No data available",
+    sessionActive: "ACTIVE SESSION",
+    tokensSpent: "TOKENS USED (30d)",
+    modelRunning: "RUNNING",
+    modelStopped: "STOPPED",
+    resetUnknown: "Resets: —",
+    resetsNow: "Resets now",
+    resetsIn: "Resets in",
+    justNow: "just now",
+    updatedPrefix: "Updated ",
+    agoSuffix: (n, unit) => `${n}${unit} ago`,
+  },
 };
+
+function t(key) {
+  return (STRINGS[currentLang] || STRINGS.pt)[key] || key;
+}
+
+// Push every translated string into the static DOM (labels, titles,
+// placeholders) — called on load and whenever the resolved language changes.
+function applyStaticStrings() {
+  document.documentElement.lang = currentLang;
+  document.querySelectorAll("[data-i18n]").forEach((el) => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    el.title = t(el.dataset.i18nTitle);
+  });
+  document.querySelectorAll("[data-i18n-placeholder]").forEach((el) => {
+    el.placeholder = t(el.dataset.i18nPlaceholder);
+  });
+}
+applyStaticStrings();
+
+function statusLabel(status) {
+  return t(
+    "status" + status.charAt(0).toUpperCase() + status.slice(1)
+  );
+}
 
 // NOTE: wry reserves `window.ipc` for its bridge, so we must use a
 // different name to avoid "Identifier 'ipc' has already been declared".
@@ -55,10 +168,24 @@ window.__setOsTheme = function (isDark) {
   if (themePref === "system") applyTheme("system");
 };
 
+// Reflect the language preference in the settings segmented control (the
+// resolved language used for actual strings lives in `currentLang`).
+function applyLanguagePref(pref) {
+  languagePref = pref || "system";
+  document.querySelectorAll("#language-seg .tab").forEach((el) => {
+    el.classList.toggle("active", el.dataset.languageValue === languagePref);
+  });
+}
+
 // ---- Data entry point (called from Rust) ----
 window.updateData = function (snapshot) {
   DATA = snapshot;
   if (snapshot.theme) applyTheme(snapshot.theme);
+  if (snapshot.language) applyLanguagePref(snapshot.language);
+  if (snapshot.resolved_language && snapshot.resolved_language !== currentLang) {
+    currentLang = snapshot.resolved_language;
+    applyStaticStrings();
+  }
 
   const ids = (DATA.providers || []).map((p) => p.id);
   if (!activeProvider || !ids.includes(activeProvider)) {
@@ -80,7 +207,7 @@ function render() {
     renderProviderList();
   }
   // a fresh snapshot always follows a refresh — restore the button label
-  document.getElementById("btn-refresh").innerHTML = "↻ Atualizar";
+  document.getElementById("btn-refresh").innerHTML = t("btnRefresh");
 }
 
 function renderGlobal() {
@@ -93,7 +220,7 @@ function renderGlobal() {
     }
   }
   document.getElementById("global-dot").className = "dot s-" + worst;
-  document.getElementById("global-status").textContent = STATUS_LABEL[worst];
+  document.getElementById("global-status").textContent = statusLabel(worst);
 }
 
 function renderTabs() {
@@ -129,7 +256,7 @@ function renderCards() {
     big.textContent = "⌀";
     const note = document.createElement("div");
     // textContent — never innerHTML: p.note comes from external API responses.
-    note.textContent = p.note || "Sem dados disponíveis";
+    note.textContent = p.note || t("noDataNote");
     div.appendChild(big);
     div.appendChild(note);
     wrap.appendChild(div);
@@ -172,7 +299,7 @@ function sessionCard(s) {
 
   const lbl = document.createElement("span");
   lbl.className = "wlabel";
-  lbl.textContent = "SESSÃO ATIVA";
+  lbl.textContent = t("sessionActive");
   top.appendChild(lbl);
 
   const dot = document.createElement("span");
@@ -201,7 +328,7 @@ function totalTokensCard(p) {
   top.className = "top";
   const lbl = document.createElement("span");
   lbl.className = "wlabel";
-  lbl.textContent = "TOKENS GASTOS (30d)";
+  lbl.textContent = t("tokensSpent");
   top.appendChild(lbl);
 
   if (p.estimated_cost_usd != null && p.estimated_cost_usd > 0) {
@@ -235,7 +362,7 @@ function localModelCard(m) {
 
   const badge = document.createElement("span");
   badge.className = "badge " + (m.loaded ? "s-healthy" : "s-depleted");
-  badge.textContent = m.loaded ? "A CORRER" : "PARADO";
+  badge.textContent = m.loaded ? t("modelRunning") : t("modelStopped");
   top.appendChild(badge);
 
   const paramSize = document.createElement("div");
@@ -294,7 +421,7 @@ function card(w, wide) {
   lbl.textContent = w.label;
   const badge = document.createElement("span");
   badge.className = "badge " + sc;
-  badge.textContent = STATUS_LABEL[w.status];
+  badge.textContent = statusLabel(w.status);
   top.appendChild(lbl);
   top.appendChild(badge);
 
@@ -338,18 +465,27 @@ function card(w, wide) {
 }
 
 function resetText(iso) {
-  if (!iso) return "Reinicia: —";
+  if (!iso) return t("resetUnknown");
   const d = new Date(iso);
-  if (isNaN(d.getTime())) return "Reinicia: —";
+  if (isNaN(d.getTime())) return t("resetUnknown");
   const now = new Date();
   const diff = d - now;
   const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  if (diff <= 0) return "Reinicia agora · " + time;
+  if (diff <= 0) return t("resetsNow") + " · " + time;
   const mins = Math.floor(diff / 60000);
   const h = Math.floor(mins / 60);
   const m = mins % 60;
   const rel = h > 0 ? h + "h " + m + "m" : m + "m";
-  return "Reinicia em " + rel + " · " + time;
+  return t("resetsIn") + " " + rel + " · " + time;
+}
+
+// Locale-aware relative time ("5s ago" vs "há 5s") — word order differs, so
+// this is a small function rather than a STRINGS entry.
+function formatAgo(secs) {
+  if (secs < 5) return t("justNow");
+  if (secs < 60) return t("agoSuffix")(secs, "s");
+  if (secs < 3600) return t("agoSuffix")(Math.floor(secs / 60), "m");
+  return t("agoSuffix")(Math.floor(secs / 3600), "h");
 }
 
 function renderUpdated() {
@@ -360,12 +496,7 @@ function renderUpdated() {
   }
   const d = new Date(DATA.updated_at);
   const secs = Math.max(0, Math.floor((new Date() - d) / 1000));
-  let rel;
-  if (secs < 5) rel = "agora mesmo";
-  else if (secs < 60) rel = "há " + secs + "s";
-  else if (secs < 3600) rel = "há " + Math.floor(secs / 60) + "m";
-  else rel = "há " + Math.floor(secs / 3600) + "h";
-  el.textContent = "Atualizado " + rel;
+  el.textContent = t("updatedPrefix") + formatAgo(secs);
 }
 
 // tick the relative labels + reset countdowns every second
@@ -379,7 +510,7 @@ setInterval(() => {
 // ---- Buttons ----
 document.getElementById("btn-refresh").onclick = () => {
   const b = document.getElementById("btn-refresh");
-  b.innerHTML = '<span class="spin">↻</span> A sincronizar…';
+  b.innerHTML = '<span class="spin">↻</span> ' + t("btnRefreshSyncing");
   sendIpc({ type: "refresh" });
 };
 
@@ -438,6 +569,21 @@ document.querySelectorAll("#theme-seg .tab").forEach((el) => {
   el.onclick = () => {
     applyTheme(el.dataset.themeValue);
     sendIpc({ type: "setTheme", theme: el.dataset.themeValue });
+  };
+});
+
+document.querySelectorAll("#language-seg .tab").forEach((el) => {
+  el.onclick = () => {
+    const pref = el.dataset.languageValue;
+    applyLanguagePref(pref);
+    // Optimistic: an explicit pt/en choice is its own resolved language.
+    // "system" waits for Rust to resolve the OS locale on the next snapshot.
+    if (pref === "pt" || pref === "en") {
+      currentLang = pref;
+      applyStaticStrings();
+      render();
+    }
+    sendIpc({ type: "setLanguage", language: pref });
   };
 });
 

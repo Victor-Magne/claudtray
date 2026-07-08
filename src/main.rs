@@ -5,6 +5,7 @@
 
 #[cfg(windows)]
 mod dpapi;
+mod i18n;
 mod model;
 mod monitor;
 mod notification;
@@ -16,6 +17,7 @@ mod state;
 mod tray_linux;
 mod window;
 
+use i18n::{catalog, Lang};
 use model::{Snapshot, Status};
 use monitor::QuotaMonitor;
 #[cfg(windows)]
@@ -64,31 +66,36 @@ async fn main() {
     // "system"). Kept in sync on SetTheme so the OS-theme-change handler knows
     // whether it should react.
     let mut theme_pref = monitor.lock().unwrap().state.theme.clone();
+    let mut language_pref = monitor.lock().unwrap().state.language.clone();
     let mut last: Option<Snapshot> = monitor.lock().unwrap().state.last_snapshot.clone();
 
     // --- Tray menu (fallback controls) ---
     #[cfg(windows)]
     let tray_menu = Menu::new();
     #[cfg(windows)]
-    let (show_id, refresh_id, exit_id) = {
-        let show_item = MenuItem::new("Mostrar painel", true, None);
-        let refresh_item = MenuItem::new("Atualizar", true, None);
-        let exit_item = MenuItem::new("Sair", true, None);
+    let (show_item, refresh_item, exit_item, show_id, refresh_id, exit_id) = {
+        let l = catalog(Lang::from_pref(&language_pref));
+        let show_item = MenuItem::new(l.menu_show, true, None);
+        let refresh_item = MenuItem::new(l.menu_refresh, true, None);
+        let exit_item = MenuItem::new(l.menu_exit, true, None);
         let _ = tray_menu.append_items(&[
             &show_item,
             &refresh_item,
             &PredefinedMenuItem::separator(),
             &exit_item,
         ]);
-        (
-            show_item.id().clone(),
-            refresh_item.id().clone(),
-            exit_item.id().clone(),
-        )
+        let show_id = show_item.id().clone();
+        let refresh_id = refresh_item.id().clone();
+        let exit_id = exit_item.id().clone();
+        (show_item, refresh_item, exit_item, show_id, refresh_id, exit_id)
     };
 
     let initial_status = last.as_ref().map(|s| s.worst_status()).unwrap_or(Status::Healthy);
-    let initial_tooltip = last.as_ref().map(|s| tooltip(s)).unwrap_or_else(|| "ClaudTray — a carregar…".to_string());
+    let initial_lang = Lang::from_pref(&language_pref);
+    let initial_tooltip = last
+        .as_ref()
+        .map(|s| tooltip(s, initial_lang))
+        .unwrap_or_else(|| catalog(initial_lang).tray_loading.to_string());
     // Alert tracking: fire a notification when any window transitions into Critical/Depleted.
     let mut prev_status = initial_status;
     // Initialise "in the past" so the first alert can fire immediately.
@@ -120,7 +127,7 @@ async fn main() {
     // Linux: ksni serves the StatusNotifierItem + dbusmenu over D-Bus; clicks
     // and menu picks arrive as UserEvents through the same proxy (tray_linux.rs).
     #[cfg(target_os = "linux")]
-    let tray = tray_linux::spawn(proxy.clone(), initial_status, initial_tooltip).await;
+    let tray = tray_linux::spawn(proxy.clone(), initial_status, initial_tooltip, initial_lang).await;
 
     // Forward tray + menu events into the event loop through the proxy. The
     // crate's default global channels are only drained when the loop happens to
@@ -212,7 +219,8 @@ async fn main() {
                     && prev_status.rank() < Status::Critical.rank()
                     && last_alert.elapsed() > Duration::from_secs(300)
                 {
-                    let (title, body) = alert_text(&snap);
+                    let lang = Lang::from_pref(&language_pref);
+                    let (title, body) = alert_text(&snap, lang);
                     notification::show_alert(
                         dashboard.hwnd(),
                         dashboard.alive_flag(),
@@ -222,11 +230,12 @@ async fn main() {
                     last_alert = Instant::now();
                 }
                 prev_status = worst;
+                let lang = Lang::from_pref(&language_pref);
                 #[cfg(windows)]
-                update_tray(&mut tray, &snap);
+                update_tray(&mut tray, &snap, lang);
                 #[cfg(target_os = "linux")]
                 if let Some(handle) = &tray {
-                    tray_linux::update(handle, worst, tooltip(&snap));
+                    tray_linux::update(handle, worst, tooltip(&snap, lang), lang);
                 }
                 dashboard.push(&snap);
                 last = Some(snap);
@@ -287,6 +296,26 @@ async fn main() {
                     };
                     dashboard.set_dark(dark);
                     spawn_set_theme(&monitor, theme);
+                }
+                IpcMessage::SetLanguage(language) => {
+                    language_pref = language.clone();
+                    let lang = Lang::from_pref(&language_pref);
+                    let l = catalog(lang);
+                    #[cfg(windows)]
+                    {
+                        show_item.set_text(l.menu_show);
+                        refresh_item.set_text(l.menu_refresh);
+                        exit_item.set_text(l.menu_exit);
+                    }
+                    #[cfg(target_os = "linux")]
+                    if let Some(handle) = &tray {
+                        let tooltip_text = last
+                            .as_ref()
+                            .map(|s| tooltip(s, lang))
+                            .unwrap_or_else(|| l.tray_loading.to_string());
+                        tray_linux::update(handle, prev_status, tooltip_text, lang);
+                    }
+                    spawn_set_language(&monitor, language);
                 }
                 IpcMessage::SetClaudeToken(token) => {
                     spawn_set_claude_token(&monitor, &proxy, token);
@@ -403,6 +432,14 @@ fn spawn_set_theme(monitor: &SharedMonitor, theme: String) {
     });
 }
 
+/// Persist a language change off the UI thread (mirrors `spawn_set_theme`).
+fn spawn_set_language(monitor: &SharedMonitor, language: String) {
+    let monitor = Arc::clone(monitor);
+    std::thread::spawn(move || {
+        monitor.lock().unwrap().set_language(&language);
+    });
+}
+
 /// Store the Copilot token and refresh so the new credential is picked up.
 fn spawn_set_token(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>, token: String) {
     let monitor = Arc::clone(monitor);
@@ -442,14 +479,14 @@ fn acquire_instance_lock() -> Result<Option<std::fs::File>, ()> {
 
 /// Refresh the tray icon colour + tooltip from the latest snapshot.
 #[cfg(windows)]
-fn update_tray(tray: &mut Option<TrayIcon>, snap: &Snapshot) {
+fn update_tray(tray: &mut Option<TrayIcon>, snap: &Snapshot, lang: Lang) {
     let Some(t) = tray else {
         return;
     };
     if let Ok(icon) = Icon::from_rgba(generate_dynamic_icon(snap.worst_status()), 64, 64) {
         let _ = t.set_icon(Some(icon));
     }
-    let _ = t.set_tooltip(Some(tooltip(snap)));
+    let _ = t.set_tooltip(Some(tooltip(snap, lang)));
 }
 
 /// Store the Claude OAuth token (from `claude setup-token`) and refresh so the
@@ -537,7 +574,7 @@ fn open_url(target: &str) {
 }
 
 /// Build the title + body for a critical/depleted alert notification.
-fn alert_text(snap: &Snapshot) -> (String, String) {
+fn alert_text(snap: &Snapshot, lang: Lang) -> (String, String) {
     let mut worst = Status::Healthy;
     let mut label = String::new();
     let mut provider = String::new();
@@ -553,20 +590,26 @@ fn alert_text(snap: &Snapshot) -> (String, String) {
             }
         }
     }
+    let l = catalog(lang);
     let title = match worst {
-        Status::Critical => "ClaudTray — Quota Crítica".to_string(),
-        Status::Depleted => "ClaudTray — Quota Esgotada".to_string(),
-        _ => "ClaudTray — Alerta".to_string(),
+        Status::Critical => l.alert_critical_title.to_string(),
+        Status::Depleted => l.alert_depleted_title.to_string(),
+        _ => l.alert_generic_title.to_string(),
     };
     let body = if pct == 0 {
-        format!("{provider} {label}: esgotado")
+        l.alert_body_exhausted
+            .replace("{provider}", &provider)
+            .replace("{label}", &label)
     } else {
-        format!("{provider} {label}: {pct}% restante")
+        l.alert_body_remaining
+            .replace("{provider}", &provider)
+            .replace("{label}", &label)
+            .replace("{pct}", &pct.to_string())
     };
     (title, body)
 }
 
-fn tooltip(snap: &Snapshot) -> String {
+fn tooltip(snap: &Snapshot, lang: Lang) -> String {
     if let Some(claude) = snap
         .providers
         .iter()
@@ -580,8 +623,12 @@ fn tooltip(snap: &Snapshot) -> String {
                 .map(|w| w.remaining_pct)
         };
         if let (Some(s), Some(w)) = (pct("session"), pct("weekly")) {
-            return format!("ClaudTray — SESSION {}% · WEEKLY {}%", s, w);
+            let l = catalog(lang);
+            return format!(
+                "ClaudTray — {} {}% · {} {}%",
+                l.tooltip_session, s, l.tooltip_weekly, w
+            );
         }
     }
-    "ClaudTray — AI Usage Monitor".to_string()
+    catalog(lang).tooltip_default.to_string()
 }

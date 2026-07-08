@@ -1,5 +1,6 @@
 use super::http::agent;
 use super::{reset_from_epoch, Provider};
+use crate::i18n::{catalog, Lang};
 use crate::model::{ActiveSession, ProviderSnapshot, WindowUsage};
 use crate::state::AppState;
 use chrono::{DateTime, Local, Utc};
@@ -49,14 +50,17 @@ impl Provider for ClaudeProvider {
             );
         };
 
+        let lang = Lang::from_pref(&state.language);
+
         // Honour a previous 429's retry-after: don't touch the endpoint again
         // until the window has passed (the dashboard polls every 5 s while
         // open, which would otherwise keep extending the block).
         if let Some(wait) = rate_limited_for() {
+            let mins = wait.as_secs().div_ceil(60).to_string();
             return ProviderSnapshot::unavailable(
                 self.id(),
                 self.name(),
-                &format!("Limite da API atingido — tenta em ~{} min", wait.as_secs().div_ceil(60)),
+                &catalog(lang).provider_rate_limited.replace("{mins}", &mins),
             );
         }
 
@@ -70,10 +74,11 @@ impl Provider for ClaudeProvider {
             Err(FetchError::RateLimited(retry_after)) => {
                 let secs = retry_after.unwrap_or(60).min(3600);
                 set_rate_limited(Duration::from_secs(secs));
+                let mins = secs.div_ceil(60).to_string();
                 ProviderSnapshot::unavailable(
                     self.id(),
                     self.name(),
-                    &format!("Limite da API atingido — tenta em ~{} min", secs.div_ceil(60)),
+                    &catalog(lang).provider_rate_limited.replace("{mins}", &mins),
                 )
             }
             Err(FetchError::Other) => ProviderSnapshot::unavailable(
