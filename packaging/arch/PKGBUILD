@@ -1,6 +1,6 @@
 # Maintainer: Victor Gomes <victorgomes20080301@gmail.com>
 pkgname=claudtray
-pkgver=1.2.0
+pkgver=1.2.1
 pkgrel=1
 pkgdesc="Real-time AI usage monitor (Claude Code, Copilot, Codex) in the system tray"
 arch=('x86_64')
@@ -10,7 +10,7 @@ options=('!lto')
 depends=('gtk3' 'webkit2gtk-4.1' 'gtk-layer-shell')
 makedepends=('cargo')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('7b66d6211d7319a92a646a4f3a810c0fa41ffe1fd6da9dc80daf9d9df0c60b49')
+sha256sums=('1cbcae3e40f54424011200c70d51fcd2cc482ff392d3896cac1f102387d29a14')
 
 prepare() {
   cd "$pkgname-$pkgver"
