@@ -288,6 +288,9 @@ async fn main() {
                     dashboard.set_dark(dark);
                     spawn_set_theme(&monitor, theme);
                 }
+                IpcMessage::SetClaudeToken(token) => {
+                    spawn_set_claude_token(&monitor, &proxy, token);
+                }
                 IpcMessage::SetCopilotToken(token) => {
                     spawn_set_token(&monitor, &proxy, token);
                 }
@@ -447,6 +450,21 @@ fn update_tray(tray: &mut Option<TrayIcon>, snap: &Snapshot) {
         let _ = t.set_icon(Some(icon));
     }
     let _ = t.set_tooltip(Some(tooltip(snap)));
+}
+
+/// Store the Claude OAuth token (from `claude setup-token`) and refresh so the
+/// new credential is picked up.
+fn spawn_set_claude_token(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>, token: String) {
+    let monitor = Arc::clone(monitor);
+    let proxy = proxy.clone();
+    std::thread::spawn(move || {
+        let snapshot = {
+            let mut guard = monitor.lock().unwrap();
+            guard.set_claude_token(&token);
+            guard.refresh()
+        };
+        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+    });
 }
 
 fn spawn_set_openrouter_key(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>, key: String) {

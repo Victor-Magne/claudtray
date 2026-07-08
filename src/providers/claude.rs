@@ -4,27 +4,17 @@ use crate::model::{ActiveSession, ProviderSnapshot, WindowUsage};
 use crate::state::AppState;
 use chrono::{DateTime, Local, Utc};
 use serde::Deserialize;
+use std::time::Duration;
 
 /// Claude (claude.ai / Claude Code subscription). Reads the *real* usage that
-/// Claude Desktop shows, from Anthropic's OAuth usage endpoint, using the
-/// access token Claude Code stores in `~/.claude/.credentials.json`. The
-/// response reports `utilization` (percent USED) per rolling window, so the
-/// remaining percentage is `100 - utilization`.
+/// Claude Desktop shows, from Anthropic's OAuth usage endpoint, using an OAuth
+/// token the user provides explicitly — generated with `claude setup-token`
+/// and pasted into the settings panel (or set via `CLAUDE_CODE_OAUTH_TOKEN`).
+/// The response reports `utilization` (percent USED) per rolling window, so
+/// the remaining percentage is `100 - utilization`.
 pub struct ClaudeProvider;
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
-
-#[derive(Deserialize)]
-struct Credentials {
-    #[serde(rename = "claudeAiOauth")]
-    oauth: Option<OAuth>,
-}
-
-#[derive(Deserialize)]
-struct OAuth {
-    #[serde(rename = "accessToken")]
-    access_token: Option<String>,
-}
 
 #[derive(Deserialize)]
 struct UsageResponse {
@@ -50,23 +40,63 @@ impl Provider for ClaudeProvider {
         "Claude"
     }
 
-    fn collect(&self, _state: &AppState) -> ProviderSnapshot {
-        let Some(token) = load_token() else {
+    fn collect(&self, state: &AppState) -> ProviderSnapshot {
+        let Some(token) = load_token(state) else {
             return ProviderSnapshot::unavailable(
                 self.id(),
                 self.name(),
-                "Inicia sessão no Claude Code",
+                "Corre `claude setup-token` e cola o token nas definições",
             );
         };
 
-        match fetch_usage(&token) {
-            Some(resp) => self.build(resp),
-            None => ProviderSnapshot::unavailable(
+        // Honour a previous 429's retry-after: don't touch the endpoint again
+        // until the window has passed (the dashboard polls every 5 s while
+        // open, which would otherwise keep extending the block).
+        if let Some(wait) = rate_limited_for() {
+            return ProviderSnapshot::unavailable(
                 self.id(),
                 self.name(),
-                "Não foi possível obter o uso (token expirado?)",
+                &format!("Limite da API atingido — tenta em ~{} min", wait.as_secs().div_ceil(60)),
+            );
+        }
+
+        match fetch_usage(&token) {
+            Ok(resp) => self.build(resp),
+            Err(FetchError::Auth) => ProviderSnapshot::unavailable(
+                self.id(),
+                self.name(),
+                "Token inválido/expirado — gera um novo com `claude setup-token`",
+            ),
+            Err(FetchError::RateLimited(retry_after)) => {
+                let secs = retry_after.unwrap_or(60).min(3600);
+                set_rate_limited(Duration::from_secs(secs));
+                ProviderSnapshot::unavailable(
+                    self.id(),
+                    self.name(),
+                    &format!("Limite da API atingido — tenta em ~{} min", secs.div_ceil(60)),
+                )
+            }
+            Err(FetchError::Other) => ProviderSnapshot::unavailable(
+                self.id(),
+                self.name(),
+                "Não foi possível obter o uso",
             ),
         }
+    }
+}
+
+/// Sticky rate-limit window fed by the endpoint's `retry-after` header.
+static RATE_LIMITED_UNTIL: std::sync::RwLock<Option<std::time::Instant>> =
+    std::sync::RwLock::new(None);
+
+fn rate_limited_for() -> Option<Duration> {
+    let until = (*RATE_LIMITED_UNTIL.read().ok()?)?;
+    until.checked_duration_since(std::time::Instant::now())
+}
+
+fn set_rate_limited(wait: Duration) {
+    if let Ok(mut w) = RATE_LIMITED_UNTIL.write() {
+        *w = Some(std::time::Instant::now() + wait);
     }
 }
 
@@ -134,21 +164,49 @@ fn parse_reset(v: &serde_json::Value) -> Option<String> {
     v.as_f64().and_then(|f| reset_from_epoch(f as i64))
 }
 
-/// Resolve the Claude Code OAuth access token: env override first, then the
-/// `~/.claude/.credentials.json` file.
-fn load_token() -> Option<String> {
+/// Resolve the Claude OAuth token from something the user provided explicitly:
+/// the token pasted in the settings panel first, then the
+/// `CLAUDE_CODE_OAUTH_TOKEN` env var. Claude Code's own credential store
+/// (`~/.claude/.credentials.json`) is intentionally NOT read — except in
+/// personal builds compiled with the `auto-credentials` feature, where it is
+/// the last-resort fallback.
+fn load_token(state: &AppState) -> Option<String> {
+    if let Some(t) = state.claude_token.as_ref() {
+        if !t.trim().is_empty() {
+            return Some(t.clone());
+        }
+    }
     if let Ok(t) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
-        if !t.is_empty() {
+        if !t.trim().is_empty() {
             return Some(t);
         }
     }
+    #[cfg(feature = "auto-credentials")]
+    if let Some(t) = load_token_from_claude_code() {
+        return Some(t);
+    }
+    None
+}
+
+/// Personal builds only: read the access token Claude Code keeps in
+/// `~/.claude/.credentials.json` (short-lived; Claude Code refreshes it).
+#[cfg(feature = "auto-credentials")]
+fn load_token_from_claude_code() -> Option<String> {
+    #[derive(Deserialize)]
+    struct Credentials {
+        #[serde(rename = "claudeAiOauth")]
+        oauth: Option<OAuth>,
+    }
+    #[derive(Deserialize)]
+    struct OAuth {
+        #[serde(rename = "accessToken")]
+        access_token: Option<String>,
+    }
+
     let path = dirs::home_dir()?.join(".claude").join(".credentials.json");
     let content = std::fs::read_to_string(path).ok()?;
     let creds: Credentials = serde_json::from_str(&content).ok()?;
-    creds
-        .oauth?
-        .access_token
-        .filter(|t| !t.trim().is_empty())
+    creds.oauth?.access_token.filter(|t| !t.trim().is_empty())
 }
 
 /// Sum tokens and estimate cost from Claude Code JSONL logs (last 30 days, up to 300 files).
@@ -291,10 +349,42 @@ fn detect_ide_sessions() -> Vec<ActiveSession> {
     sessions
 }
 
-fn fetch_usage(token: &str) -> Option<UsageResponse> {
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_token_uses_only_the_user_provided_state_token() {
+        let mut state = AppState::default();
+        assert_eq!(load_token(&state), None, "no token configured ⇒ none");
+
+        state.claude_token = Some("   ".to_string());
+        assert_eq!(load_token(&state), None, "blank token ⇒ none");
+
+        state.claude_token = Some("sk-ant-oat01-test".to_string());
+        assert_eq!(load_token(&state).as_deref(), Some("sk-ant-oat01-test"));
+    }
+}
+
+enum FetchError {
+    /// 401/403 — the token itself was rejected.
+    Auth,
+    /// 429 — with the `retry-after` value (seconds) when the API sent one.
+    RateLimited(Option<u64>),
+    Other,
+}
+
+fn fetch_usage(token: &str) -> Result<UsageResponse, FetchError> {
     let token = token.trim().to_string();
-    super::http::with_retry(3, 1, || {
-        let mut resp = agent(false)
+    let mut last_err = FetchError::Other;
+    // Retry only transport-level failures. A definitive HTTP answer (401, 429,
+    // even 5xx) must NOT be retried in a tight loop — hammering the endpoint is
+    // what gets the token rate-limited in the first place.
+    for attempt in 0..3u64 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_secs(attempt));
+        }
+        let mut resp = match agent(false)
             .get(USAGE_URL)
             .header("Authorization", format!("Bearer {token}"))
             .header("Accept", "application/json")
@@ -302,16 +392,34 @@ fn fetch_usage(token: &str) -> Option<UsageResponse> {
             .header("anthropic-beta", "oauth-2025-04-20")
             .header("User-Agent", "ClaudTray")
             .call()
-            .ok()?;
-        if resp.status().as_u16() != 200 {
-            return None;
+        {
+            Ok(r) => r,
+            Err(_) => continue, // transport error — worth retrying
+        };
+        match resp.status().as_u16() {
+            200 => {
+                let text = resp
+                    .body_mut()
+                    .with_config()
+                    .limit(super::http::MAX_BODY_BYTES)
+                    .read_to_string()
+                    .map_err(|_| FetchError::Other)?;
+                return serde_json::from_str::<UsageResponse>(&text).map_err(|_| FetchError::Other);
+            }
+            401 | 403 => return Err(FetchError::Auth),
+            429 => {
+                let retry_after = resp
+                    .headers()
+                    .get("retry-after")
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|s| s.trim().parse::<u64>().ok());
+                return Err(FetchError::RateLimited(retry_after));
+            }
+            _ => {
+                last_err = FetchError::Other;
+                break;
+            }
         }
-        let text = resp
-            .body_mut()
-            .with_config()
-            .limit(super::http::MAX_BODY_BYTES)
-            .read_to_string()
-            .ok()?;
-        serde_json::from_str::<UsageResponse>(&text).ok()
-    })
+    }
+    Err(last_err)
 }

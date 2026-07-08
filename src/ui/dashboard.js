@@ -423,6 +423,7 @@ function renderProviderList() {
 
 const settings = document.getElementById("settings");
 document.getElementById("btn-settings").onclick = () => {
+  document.getElementById("claude-token").value = "";
   document.getElementById("copilot-token").value = "";
   document.getElementById("openrouter-key").value = "";
   document.getElementById("gemini-key").value = "";
@@ -458,10 +459,12 @@ document.querySelectorAll(".link-btn").forEach((btn) => {
 });
 
 document.getElementById("btn-save").onclick = () => {
+  const claude  = document.getElementById("claude-token").value.trim();
   const copilot = document.getElementById("copilot-token").value.trim();
   const orKey   = document.getElementById("openrouter-key").value.trim();
   const gemini  = document.getElementById("gemini-key").value.trim();
   const proxy   = document.getElementById("http-proxy").value.trim();
+  if (claude)  sendIpc({ type: "setClaudeToken", token: claude });
   if (copilot) sendIpc({ type: "setCopilotToken", token: copilot });
   if (orKey)   sendIpc({ type: "setOpenRouterKey", key: orKey });
   if (gemini)  sendIpc({ type: "setGeminiKey", key: gemini });

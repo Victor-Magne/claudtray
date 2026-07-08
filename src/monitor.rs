@@ -166,6 +166,11 @@ impl QuotaMonitor {
         }
     }
 
+    pub fn set_claude_token(&mut self, token: &str) {
+        AppState::set_secret(&mut self.state.claude_token, token);
+        self.state.save();
+    }
+
     pub fn set_copilot_token(&mut self, token: &str) {
         AppState::set_secret(&mut self.state.copilot_token, token);
         self.state.save();

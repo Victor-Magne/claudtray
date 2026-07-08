@@ -42,6 +42,7 @@ pub enum IpcMessage {
     Ready,
     Refresh,
     SetTheme(String),
+    SetClaudeToken(String),
     SetCopilotToken(String),
     Close,
     /// The webview lost focus to another window (click-away).
@@ -119,6 +120,10 @@ fn parse_ipc(body: &str) -> Option<IpcMessage> {
         "setTheme" => {
             let theme = v.get("theme")?.as_str()?.to_string();
             Some(IpcMessage::SetTheme(theme))
+        }
+        "setClaudeToken" => {
+            let token = v.get("token")?.as_str()?.to_string();
+            Some(IpcMessage::SetClaudeToken(token))
         }
         "setCopilotToken" => {
             let token = v.get("token")?.as_str()?.to_string();

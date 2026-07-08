@@ -10,6 +10,13 @@ readme = "README.md"
 keywords = ["claude", "ai", "usage", "monitor", "tray"]
 categories = ["gui"]
 
+[features]
+# Personal/dev builds only: fall back to the OAuth token Claude Code stores in
+# `~/.claude/.credentials.json` when no token was configured explicitly.
+# Public/store builds (winget, scoop, releases) MUST be built without this —
+# reusing another app's credentials silently is not acceptable there.
+auto-credentials = []
+
 [dependencies]
 tao = "0.31"
 tokio = { version = "1.35", features = ["full"] }

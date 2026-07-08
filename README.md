@@ -14,7 +14,7 @@ ClaudTray lives in the system tray and gives you an at-a-glance coloured indicat
 
 | Provider | Data source | Windows tracked |
 |---|---|---|
-| **Claude** (claude.ai / Claude Code) | Anthropic OAuth API (`~/.claude/.credentials.json`) | Session (5 h), Weekly (7 d), Opus (7 d) |
+| **Claude** (claude.ai / Claude Code) | Anthropic OAuth API (token via `claude setup-token`) | Session (5 h), Weekly (7 d), Opus (7 d) |
 | **GitHub Copilot** | Local rate-limit snapshots / API token | Monthly tokens |
 | **Codex** | Local rate-limit snapshots | Monthly tokens |
 | **Antigravity** | Local rate-limit snapshots | Monthly tokens |
@@ -82,23 +82,40 @@ Alternatively, build manually from source — see [Building from source](#buildi
 
 ### Claude usage
 
-ClaudTray reads the OAuth access token stored by Claude Code at:
+ClaudTray uses an OAuth token that **you provide explicitly** — it never reads
+Claude Code's own credential store. Generate a token with:
 
 ```
-%USERPROFILE%\.claude\.credentials.json
+claude setup-token
 ```
 
-It then calls Anthropic's usage endpoint and displays the `utilization` percentage for each rolling window. No credentials are stored or transmitted anywhere other than Anthropic's own API.
+then paste it into **Settings → Token Claude** in the dashboard. The token is
+stored encrypted (DPAPI on Windows, ChaCha20-Poly1305 on Linux) and used only to
+call Anthropic's usage endpoint, which reports the `utilization` percentage for
+each rolling window. It is never transmitted anywhere other than Anthropic's own API.
 
 You can also set the token via environment variable (useful for testing):
 
 ```powershell
-$env:CLAUDE_CODE_OAUTH_TOKEN = "sk-ant-..."
+$env:CLAUDE_CODE_OAUTH_TOKEN = "sk-ant-oat01-..."
 ```
 
 ### Other providers
 
 Copilot, Codex, and Antigravity usage is read from local rate-limit snapshot files that each tool writes to disk. ClaudTray inspects running processes and known file paths to find active sessions.
+
+### Where to get each token / API key
+
+All tokens are optional and entered in **Settings** (⚙ in the dashboard). Each one is stored encrypted (DPAPI on Windows, ChaCha20-Poly1305 on Linux) and only ever sent to its own provider's API.
+
+| Field in Settings | Where to get it | Format |
+|---|---|---|
+| Token Claude | Run `claude setup-token` in a terminal (requires [Claude Code](https://code.claude.com) logged in) and copy the token it prints | `sk-ant-oat01-…` |
+| Token GitHub (Copilot) | [github.com/settings/tokens](https://github.com/settings/tokens) → *Generate new token* (classic) with the `copilot` / `read:user` scope | `ghp_…` |
+| API Key OpenRouter | [openrouter.ai/keys](https://openrouter.ai/keys) → *Create Key* | `sk-or-…` |
+| API Key Gemini | [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey) → *Create API key* | `AIza…` |
+
+The "Obter ↗" button next to each field opens the corresponding page in your browser. Codex, Antigravity and Ollama need no token — they are read from local files / the local API.
 
 ### Tray icon colours
 

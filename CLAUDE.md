@@ -38,6 +38,10 @@ cargo build --release
 CLAUDTRAY_DUMP=1 ./target/release/claudtray
 ```
 
+### Feature flags
+
+`--features auto-credentials`: personal/dev builds only — the Claude provider falls back to the token in `~/.claude/.credentials.json` when none was configured. Public builds (CI, winget, scoop) must NOT enable it; without it the fallback code is compiled out entirely (winget moderation requires the user to provide the token explicitly via Settings / `claude setup-token`).
+
 `cargo test` runs the unit tests (secret round-trip, state serialization). Behaviour is verified by running the app and inspecting the debug snapshot.
 
 ## Architecture
