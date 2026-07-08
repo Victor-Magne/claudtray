@@ -1,6 +1,6 @@
 [package]
 name = "claudtray"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 description = "Real-time AI usage monitor (Claude Code, Copilot, Codex) in the system tray (Windows & Linux)"
 license = "MIT"
