@@ -26,43 +26,48 @@ impl Provider for AntigravityProvider {
     }
 
     fn collect(&self, _state: &AppState) -> ProviderSnapshot {
-        let Some((pid, token)) = find_process() else {
+        let candidates = find_processes();
+        if candidates.is_empty() {
             return ProviderSnapshot::unavailable(
                 self.id(),
                 self.name(),
                 "Abre o Antigravity para ver a quota",
             );
-        };
-
-        let ports = find_listen_ports(pid);
-        if ports.is_empty() {
-            return ProviderSnapshot::unavailable(self.id(), self.name(), "Porta não encontrada");
         }
 
-        for port in ports {
-            if let Some(windows) = probe(port, &token) {
-                if !windows.is_empty() {
-                    return ProviderSnapshot {
-                        id: self.id().to_string(),
-                        name: self.name().to_string(),
-                        available: true,
-                        note: None,
-                        windows,
-                        total_tokens: None,
-                        estimated_cost_usd: None,
-                        local_models: Vec::new(),
-                        active_sessions: Vec::new(),
-                    };
+        // `sysinfo` sometimes surfaces the language server's individual threads
+        // as extra "processes" sharing the same cmdline (and thus the same CSRF
+        // token) as the real one — but `netstat2` can only associate a listening
+        // socket with the genuine process PID, never a bare thread id. Try every
+        // matching candidate rather than trusting the first (HashMap-ordered) one.
+        for (pid, token) in &candidates {
+            for port in find_listen_ports(*pid) {
+                if let Some(windows) = probe(port, token) {
+                    if !windows.is_empty() {
+                        return ProviderSnapshot {
+                            id: self.id().to_string(),
+                            name: self.name().to_string(),
+                            available: true,
+                            note: None,
+                            windows,
+                            total_tokens: None,
+                            estimated_cost_usd: None,
+                            local_models: Vec::new(),
+                            active_sessions: Vec::new(),
+                        };
+                    }
                 }
             }
         }
 
-        ProviderSnapshot::unavailable(self.id(), self.name(), "Sem resposta do servidor")
+        ProviderSnapshot::unavailable(self.id(), self.name(), "Porta não encontrada")
     }
 }
 
-/// Locate the Antigravity language-server process and its `--csrf_token`.
-fn find_process() -> Option<(u32, String)> {
+/// Locate every Antigravity language-server process (and its `--csrf_token`)
+/// visible to `sysinfo`. May include duplicate entries for the same real
+/// process (see the comment in `collect`), which callers must tolerate.
+fn find_processes() -> Vec<(u32, String)> {
     let mut sys = System::new();
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
@@ -70,6 +75,7 @@ fn find_process() -> Option<(u32, String)> {
         ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always),
     );
 
+    let mut out = Vec::new();
     for (pid, proc_) in sys.processes() {
         let args: Vec<String> = proc_
             .cmd()
@@ -85,10 +91,10 @@ fn find_process() -> Option<(u32, String)> {
             continue;
         }
         if let Some(token) = extract_csrf(&args) {
-            return Some((pid.as_u32(), token));
+            out.push((pid.as_u32(), token));
         }
     }
-    None
+    out
 }
 
 fn extract_csrf(args: &[String]) -> Option<String> {
