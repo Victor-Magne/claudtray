@@ -24,7 +24,7 @@ pub struct ClaudTray {
 
 /// RGBA (renderer output) → ARGB32 network byte order (SNI wire format).
 fn to_ksni_icon(mut rgba: Vec<u8>) -> ksni::Icon {
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         px.rotate_right(1);
     }
     ksni::Icon {

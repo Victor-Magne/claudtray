@@ -59,7 +59,7 @@ pub fn modified_within(path: &Path, days: i64) -> bool {
 pub fn newest_jsonl_files(root: &Path, days: i64) -> Vec<PathBuf> {
     let mut found: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
     collect_jsonl(root, days, 0, &mut found);
-    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.sort_by_key(|f| std::cmp::Reverse(f.0));
     found.into_iter().map(|(_, p)| p).collect()
 }
 

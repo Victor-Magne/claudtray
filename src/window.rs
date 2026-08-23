@@ -11,7 +11,6 @@ use window_vibrancy::apply_mica;
 use wry::{WebContext, WebView, WebViewBuilder};
 #[cfg(target_os = "linux")]
 use wry::WebViewBuilderExtUnix;
-use serde_json;
 
 
 const WIDTH: f64 = 380.0;

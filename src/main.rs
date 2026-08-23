@@ -380,24 +380,21 @@ async fn main() {
             } => {
                 if key_event.state == tao::event::ElementState::Pressed
                     && key_event.physical_key == tao::keyboard::KeyCode::Escape
+                    && dashboard.is_visible()
                 {
-                    if dashboard.is_visible() {
-                        dashboard.hide();
-                        last_action = Instant::now();
-                    }
+                    dashboard.hide();
+                    last_action = Instant::now();
                 }
             }
+            // The user flipped Windows between light and dark. Only act while
+            // following the system theme: retint Mica and tell JS so the
+            // dashboard tracks the OS in real time.
             Event::WindowEvent {
                 event: tao::event::WindowEvent::ThemeChanged(theme),
                 ..
-            } => {
-                // The user flipped Windows between light and dark. Only act while
-                // following the system theme: retint Mica and tell JS so the
-                // dashboard tracks the OS in real time.
-                if theme_pref == "system" {
-                    dashboard.set_dark(theme == tao::window::Theme::Dark);
-                    dashboard.notify_os_theme();
-                }
+            } if theme_pref == "system" => {
+                dashboard.set_dark(theme == tao::window::Theme::Dark);
+                dashboard.notify_os_theme();
             }
             _ => {}
         }
@@ -464,6 +461,7 @@ fn acquire_instance_lock() -> Result<Option<std::fs::File>, ()> {
     let dir = dirs::runtime_dir().unwrap_or_else(std::env::temp_dir);
     let Ok(file) = std::fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(dir.join("claudtray.lock"))
