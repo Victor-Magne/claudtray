@@ -127,7 +127,7 @@ fn find_listen_ports(pid: u32) -> Vec<u16> {
         }
     }
     // loopback first
-    ports.sort_by(|a, b| b.0.cmp(&a.0));
+    ports.sort_by_key(|p| std::cmp::Reverse(p.0));
     ports.into_iter().map(|(_, p)| p).collect()
 }
 
