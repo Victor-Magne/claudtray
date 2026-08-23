@@ -354,23 +354,6 @@ fn detect_ide_sessions() -> Vec<ActiveSession> {
     sessions
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn load_token_uses_only_the_user_provided_state_token() {
-        let mut state = AppState::default();
-        assert_eq!(load_token(&state), None, "no token configured ⇒ none");
-
-        state.claude_token = Some("   ".to_string());
-        assert_eq!(load_token(&state), None, "blank token ⇒ none");
-
-        state.claude_token = Some("sk-ant-oat01-test".to_string());
-        assert_eq!(load_token(&state).as_deref(), Some("sk-ant-oat01-test"));
-    }
-}
-
 enum FetchError {
     /// 401/403 — the token itself was rejected.
     Auth,
@@ -427,4 +410,21 @@ fn fetch_usage(token: &str) -> Result<UsageResponse, FetchError> {
         }
     }
     Err(last_err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_token_uses_only_the_user_provided_state_token() {
+        let mut state = AppState::default();
+        assert_eq!(load_token(&state), None, "no token configured ⇒ none");
+
+        state.claude_token = Some("   ".to_string());
+        assert_eq!(load_token(&state), None, "blank token ⇒ none");
+
+        state.claude_token = Some("sk-ant-oat01-test".to_string());
+        assert_eq!(load_token(&state).as_deref(), Some("sk-ant-oat01-test"));
+    }
 }
