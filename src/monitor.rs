@@ -2,7 +2,7 @@ use crate::i18n::Lang;
 use crate::model::{ProviderInfo, ProviderSnapshot, Snapshot, UsagePoint};
 use crate::providers;
 use crate::state::AppState;
-use chrono::Local;
+use chrono::{DateTime, Local};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
@@ -110,6 +110,26 @@ impl QuotaMonitor {
                 }
             };
             snaps.push(snap);
+        }
+
+        // Project each window's exhaustion time from its recent decline
+        // (using history recorded so far, i.e. not counting this tick's
+        // sample yet — that's added below).
+        let now = Local::now();
+        for snap in snaps.iter_mut() {
+            if !snap.available {
+                continue;
+            }
+            for w in snap.windows.iter_mut() {
+                let key = format!("{}:{}", snap.id, w.key);
+                w.estimated_exhaustion = estimate_exhaustion(
+                    &self.state.history,
+                    &key,
+                    w.remaining_pct,
+                    w.reset_at.as_deref(),
+                    now,
+                );
+            }
         }
 
         // Record a history point every 5 minutes.
@@ -225,5 +245,116 @@ impl QuotaMonitor {
         providers::http::set_proxy(if valid { Some(proxy.to_string()) } else { None });
         AppState::set_secret(&mut self.state.http_proxy, if valid { proxy } else { "" });
         self.state.save();
+    }
+}
+
+/// Project when a window (identified by `"{provider_id}:{window_key}"`) will
+/// hit 0%, from its recent decline in `history`. Looks at the longest
+/// trailing run of non-increasing samples (i.e. since the last reset, without
+/// needing to detect the reset explicitly), requires at least 15 minutes of
+/// signal, and never projects past the window's own `reset_at` — a window
+/// that resets before it would exhaust has no ETA to show.
+///
+/// ponytail: linear extrapolation over the recent trend, not a real usage
+/// model — good enough for "should I worry", revisit if it proves noisy.
+fn estimate_exhaustion(
+    history: &[UsagePoint],
+    key: &str,
+    remaining_pct: u32,
+    reset_at: Option<&str>,
+    now: DateTime<Local>,
+) -> Option<String> {
+    let mut series: Vec<(DateTime<Local>, u32)> = history
+        .iter()
+        .filter_map(|p| {
+            let pct = *p.values.get(key)?;
+            let at = DateTime::parse_from_rfc3339(&p.at).ok()?.with_timezone(&Local);
+            Some((at, pct))
+        })
+        .collect();
+    series.push((now, remaining_pct));
+    if series.len() < 2 {
+        return None;
+    }
+
+    // Walk back from "now" while the series is non-increasing (1pt of noise
+    // tolerance) to isolate the current burn window.
+    let mut start = series.len() - 1;
+    while start > 0 && series[start - 1].1 + 1 >= series[start].1 {
+        start -= 1;
+    }
+    let (first_at, first_pct) = series[start];
+    let (last_at, last_pct) = series[series.len() - 1];
+
+    let minutes = (last_at - first_at).num_minutes() as f64;
+    if minutes < 15.0 {
+        return None;
+    }
+    let drop = first_pct as f64 - last_pct as f64;
+    if drop <= 1.0 {
+        // Flat, or within the noise tolerance used to build the run above.
+        return None;
+    }
+    let rate_per_min = drop / minutes;
+    let eta_minutes = last_pct as f64 / rate_per_min;
+    let eta = last_at + chrono::Duration::minutes(eta_minutes.round() as i64);
+
+    if let Some(reset_str) = reset_at {
+        if let Ok(reset) = DateTime::parse_from_rfc3339(reset_str) {
+            if eta >= reset.with_timezone(&Local) {
+                return None;
+            }
+        }
+    }
+    Some(eta.to_rfc3339())
+}
+
+#[cfg(test)]
+mod exhaustion_tests {
+    use super::*;
+
+    fn point(minutes_ago: i64, key: &str, pct: u32, now: DateTime<Local>) -> UsagePoint {
+        let mut values = HashMap::new();
+        values.insert(key.to_string(), pct);
+        UsagePoint {
+            at: (now - chrono::Duration::minutes(minutes_ago)).to_rfc3339(),
+            values,
+        }
+    }
+
+    #[test]
+    fn steady_decline_projects_an_eta_before_reset() {
+        let now = Local::now();
+        let history = vec![
+            point(60, "claude:session", 80, now),
+            point(30, "claude:session", 60, now),
+        ];
+        let reset = (now + chrono::Duration::hours(5)).to_rfc3339();
+        let eta = estimate_exhaustion(&history, "claude:session", 40, Some(&reset), now);
+        assert!(eta.is_some(), "steady decline should produce an ETA");
+    }
+
+    #[test]
+    fn flat_history_has_no_eta() {
+        let now = Local::now();
+        let history = vec![
+            point(60, "claude:session", 80, now),
+            point(30, "claude:session", 82, now),
+        ];
+        let eta = estimate_exhaustion(&history, "claude:session", 81, None, now);
+        assert!(eta.is_none(), "flat/increasing usage shouldn't project an ETA");
+    }
+
+    #[test]
+    fn eta_past_reset_is_suppressed() {
+        let now = Local::now();
+        // Very slow decline: 1pt per 30 minutes → hours from exhaustion.
+        let history = vec![
+            point(60, "claude:session", 50, now),
+            point(30, "claude:session", 49, now),
+        ];
+        let reset = (now + chrono::Duration::minutes(10)).to_rfc3339();
+        let eta = estimate_exhaustion(&history, "claude:session", 48, Some(&reset), now);
+        assert!(eta.is_none(), "resets before exhaustion, so no ETA should show");
     }
 }

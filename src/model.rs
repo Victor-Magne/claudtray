@@ -52,6 +52,12 @@ pub struct WindowUsage {
     /// RFC3339 (local offset) timestamp of when the window resets. `None` if
     /// unknown.
     pub reset_at: Option<String>,
+    /// RFC3339 (local offset) projection of when this window hits 0%, based on
+    /// its recent decline and capped at `reset_at`. `None` when there isn't
+    /// enough history, the window isn't declining, or it resets before it
+    /// would exhaust.
+    #[serde(default)]
+    pub estimated_exhaustion: Option<String>,
 }
 
 impl WindowUsage {
@@ -68,6 +74,7 @@ impl WindowUsage {
             remaining_pct,
             status: Status::from_remaining(remaining_pct, true),
             reset_at,
+            estimated_exhaustion: None,
         }
     }
 }
