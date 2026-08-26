@@ -10,6 +10,11 @@ use std::time::{Duration, Instant};
 /// so fast polling doesn't flicker to "unavailable" on a transient blip.
 const STALE_TTL: Duration = Duration::from_secs(300);
 
+/// Minimum gap between disk writes of `state.json` from the refresh path.
+/// The in-memory snapshot is always fresh; only the persisted copy is
+/// throttled, so a restart is at most this stale.
+const SAVE_INTERVAL: Duration = Duration::from_secs(30);
+
 /// Single source of truth: runs every provider and produces a [`Snapshot`] for
 /// the dashboard + tray icon.
 pub struct QuotaMonitor {
@@ -19,6 +24,8 @@ pub struct QuotaMonitor {
     last_good: HashMap<String, (ProviderSnapshot, Instant)>,
     /// When the last history sample was recorded (not persisted).
     last_history_sample: Option<Instant>,
+    /// When `state.json` was last written to disk (throttles the refresh-path save).
+    last_save: Option<Instant>,
 }
 
 impl QuotaMonitor {
@@ -31,6 +38,19 @@ impl QuotaMonitor {
             last: None,
             last_good: HashMap::new(),
             last_history_sample: None,
+            last_save: None,
+        }
+    }
+
+    /// Persist `state.json`, but skip the write if the last one was within
+    /// `SAVE_INTERVAL`. Called from the hot refresh path (every 5-60s); the
+    /// in-memory snapshot (`self.last`) is updated unconditionally, so nothing
+    /// user-visible depends on this write happening immediately.
+    fn save_throttled(&mut self) {
+        let due = self.last_save.is_none_or(|t| t.elapsed() >= SAVE_INTERVAL);
+        if due {
+            self.state.save();
+            self.last_save = Some(Instant::now());
         }
     }
 
@@ -145,7 +165,7 @@ impl QuotaMonitor {
             history: history_map,
         };
         self.state.last_snapshot = Some(snapshot.clone());
-        self.state.save();
+        self.save_throttled();
         self.last = Some(snapshot.clone());
         snapshot
     }
