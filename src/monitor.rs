@@ -105,7 +105,11 @@ impl QuotaMonitor {
                 fresh
             } else {
                 match self.last_good.get(id) {
-                    Some((good, ts)) if ts.elapsed() < STALE_TTL => good.clone(),
+                    Some((good, ts)) if ts.elapsed() < STALE_TTL => {
+                        let mut good = good.clone();
+                        good.stale_secs = Some(ts.elapsed().as_secs());
+                        good
+                    }
                     _ => fresh,
                 }
             };

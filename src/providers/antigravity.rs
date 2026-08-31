@@ -54,6 +54,7 @@ impl Provider for AntigravityProvider {
                             estimated_cost_usd: None,
                             local_models: Vec::new(),
                             active_sessions: Vec::new(),
+                            stale_secs: None,
                         };
                     }
                 }
@@ -242,4 +243,41 @@ fn parse_reset(v: &serde_json::Value) -> Option<String> {
         return reset_from_epoch(n);
     }
     v.as_f64().and_then(|f| reset_from_epoch(f as i64))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Status;
+
+    #[test]
+    fn build_windows_maps_configs_and_caps_at_six() {
+        let resp: Resp =
+            serde_json::from_str(include_str!("../../tests/fixtures/antigravity/user_status.json"))
+                .unwrap();
+        let windows = build_windows(resp);
+
+        assert_eq!(windows.len(), 6, "capped even though the fixture has 7 configs");
+
+        assert_eq!(windows[0].key, "model0");
+        assert_eq!(windows[0].label, "Gemini 2.5 Pro");
+        assert_eq!(windows[0].remaining_pct, 73);
+        assert_eq!(windows[0].status, Status::Healthy);
+        assert!(windows[0].reset_at.is_some());
+
+        assert_eq!(windows[1].remaining_pct, 10);
+        assert_eq!(windows[1].status, Status::Critical);
+        assert!(windows[1].reset_at.is_none());
+
+        assert_eq!(windows[2].remaining_pct, 0);
+        assert_eq!(windows[2].status, Status::Depleted);
+    }
+
+    #[test]
+    fn parse_reset_accepts_iso_and_epoch() {
+        assert!(parse_reset(&serde_json::json!("2026-01-16T00:00:00Z")).is_some());
+        assert!(parse_reset(&serde_json::json!(1_768_500_000_i64)).is_some());
+        assert!(parse_reset(&serde_json::json!("1768500000")).is_some());
+        assert!(parse_reset(&serde_json::json!("not-a-date")).is_none());
+    }
 }

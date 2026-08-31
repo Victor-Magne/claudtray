@@ -1,0 +1,5 @@
+{"payload":{"type":"session_meta","cwd":"/home/x/proj"}}
+{"payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":10.0,"window_minutes":300,"resets_at":1768500000},"secondary":{"used_percent":40.0,"window_minutes":10080,"resets_at":1769000000}}}}
+this line is not json and must be skipped
+{"payload":{"type":"token_count","rate_limits":{"primary":{"used_percent":55.0,"window_minutes":300,"resets_at":1768600000},"secondary":{"used_percent":42.0,"window_minutes":10080,"resets_at":1769100000}}}}
+{"payload":{"type":"event_msg","message":"done"}}

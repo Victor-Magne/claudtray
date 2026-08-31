@@ -1,0 +1,6 @@
+{
+  "models": [
+    { "name": "llama3:8b", "size": 4700000000, "details": { "parameter_size": "8B", "quantization_level": "Q4_0" } },
+    { "name": "mistral:7b", "size": 4100000000, "details": { "parameter_size": "7B", "quantization_level": "Q4_K_M" } }
+  ]
+}

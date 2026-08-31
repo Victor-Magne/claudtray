@@ -86,15 +86,25 @@ pub struct Catalog {
     pub tray_loading: &'static str,
     pub alert_critical_title: &'static str,
     pub alert_depleted_title: &'static str,
-    pub alert_generic_title: &'static str,
     pub alert_body_exhausted: &'static str,
     pub alert_body_remaining: &'static str,
     pub tooltip_session: &'static str,
     pub tooltip_weekly: &'static str,
     pub tooltip_default: &'static str,
+    /// Tray tooltip: leading word(s) of the "resets in <relative time>" suffix
+    /// shown after the worst window's percentage.
+    pub tooltip_reset: &'static str,
     /// Claude provider note when the OAuth usage endpoint 429s. `{mins}` is
     /// replaced with the retry-after estimate, rounded up to whole minutes.
     pub provider_rate_limited: &'static str,
+    /// Predictive-alert title: a window is projected to hit zero soon, or is
+    /// critically low but about to reset. Body comes from `alert_predictive_body`
+    /// or `alert_reset_soon_body`.
+    pub alert_predictive_title: &'static str,
+    /// `{provider} {label} {mins}` — projected to run out in about {mins} minutes.
+    pub alert_predictive_body: &'static str,
+    /// `{provider} {label} {mins}` — critically low, but resets in about {mins} minutes.
+    pub alert_reset_soon_body: &'static str,
 }
 
 const PT: Catalog = Catalog {
@@ -104,13 +114,16 @@ const PT: Catalog = Catalog {
     tray_loading: "ClaudTray — a carregar…",
     alert_critical_title: "ClaudTray — Quota Crítica",
     alert_depleted_title: "ClaudTray — Quota Esgotada",
-    alert_generic_title: "ClaudTray — Alerta",
     alert_body_exhausted: "{provider} {label}: esgotado",
     alert_body_remaining: "{provider} {label}: {pct}% restante",
     tooltip_session: "SESSÃO",
     tooltip_weekly: "SEMANAL",
     tooltip_default: "ClaudTray — Monitor de Uso de IA",
+    tooltip_reset: "repõe em",
     provider_rate_limited: "Limite da API atingido — tenta em ~{mins} min",
+    alert_predictive_title: "ClaudTray — Quota a Esgotar",
+    alert_predictive_body: "{provider} {label}: esgota em ~{mins} min",
+    alert_reset_soon_body: "{provider} {label}: repõe em ~{mins} min",
 };
 
 const EN: Catalog = Catalog {
@@ -120,13 +133,16 @@ const EN: Catalog = Catalog {
     tray_loading: "ClaudTray — loading…",
     alert_critical_title: "ClaudTray — Critical Quota",
     alert_depleted_title: "ClaudTray — Quota Exhausted",
-    alert_generic_title: "ClaudTray — Alert",
     alert_body_exhausted: "{provider} {label}: exhausted",
     alert_body_remaining: "{provider} {label}: {pct}% remaining",
     tooltip_session: "SESSION",
     tooltip_weekly: "WEEKLY",
     tooltip_default: "ClaudTray — AI Usage Monitor",
+    tooltip_reset: "resets in",
     provider_rate_limited: "API limit reached — try again in ~{mins} min",
+    alert_predictive_title: "ClaudTray — Quota Running Low",
+    alert_predictive_body: "{provider} {label}: runs out in ~{mins} min",
+    alert_reset_soon_body: "{provider} {label}: resets in ~{mins} min",
 };
 
 pub fn catalog(lang: Lang) -> &'static Catalog {

@@ -1,0 +1,8 @@
+{
+  "models": [
+    { "name": "models/gemini-2.5-pro", "supportedGenerationMethods": ["generateContent", "countTokens"] },
+    { "name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"] },
+    { "name": "models/embedding-001", "supportedGenerationMethods": ["embedContent"] },
+    { "name": "models/aqa" }
+  ]
+}
