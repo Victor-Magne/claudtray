@@ -57,6 +57,7 @@ const STRINGS = {
     exhaustsIn: "Esgota em",
     justNow: "agora mesmo",
     updatedPrefix: "Atualizado ",
+    staleNote: "Sem resposta do provider —",
     agoSuffix: (n, unit) => `há ${n}${unit}`,
   },
   en: {
@@ -100,6 +101,7 @@ const STRINGS = {
     exhaustsIn: "Runs out in",
     justNow: "just now",
     updatedPrefix: "Updated ",
+    staleNote: "No response from provider —",
     agoSuffix: (n, unit) => `${n}${unit} ago`,
   },
 };
@@ -233,6 +235,7 @@ function renderTabs() {
     el.className = "tab" + (p.id === activeProvider ? " active" : "");
     el.textContent = p.name;
     if (!p.available) el.style.opacity = "0.55";
+    if (p.stale_secs != null) el.title = t("staleNote") + " " + formatAgo(p.stale_secs);
     el.onclick = () => {
       activeProvider = p.id;
       render();
@@ -263,6 +266,13 @@ function renderCards() {
     div.appendChild(note);
     wrap.appendChild(div);
     return;
+  }
+
+  if (p.stale_secs != null) {
+    const stale = document.createElement("div");
+    stale.className = "stale-banner";
+    stale.textContent = t("staleNote") + " " + formatAgo(p.stale_secs);
+    wrap.appendChild(stale);
   }
 
   if (hasWindows) {

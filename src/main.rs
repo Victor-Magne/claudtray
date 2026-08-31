@@ -17,11 +17,13 @@ mod state;
 mod tray_linux;
 mod window;
 
+use chrono::{DateTime, Local};
 use i18n::{catalog, Lang};
-use model::{Snapshot, Status};
+use model::{Snapshot, Status, WindowUsage};
 use monitor::QuotaMonitor;
 #[cfg(windows)]
 use renderer::generate_dynamic_icon;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -96,8 +98,9 @@ async fn main() {
         .as_ref()
         .map(|s| tooltip(s, initial_lang))
         .unwrap_or_else(|| catalog(initial_lang).tray_loading.to_string());
-    // Alert tracking: fire a notification when any window transitions into Critical/Depleted.
-    let mut prev_status = initial_status;
+    // Per-window alert de-duplication: remembers which notifications already
+    // fired so a window sitting at Critical/Depleted doesn't re-alert every tick.
+    let mut alert_state = AlertState::default();
     // Initialise "in the past" so the first alert can fire immediately.
     // checked_sub avoids an overflow panic on freshly-booted machines where the
     // monotonic clock (uptime) is still under an hour.
@@ -213,29 +216,31 @@ async fn main() {
         match event {
             Event::UserEvent(UserEvent::Tick) => spawn_refresh(&monitor, &proxy),
             Event::UserEvent(UserEvent::Snapshot(snap)) => {
-                let worst = snap.worst_status();
-                // Notify when transitioning into Critical/Depleted (5 min cooldown).
-                if worst.rank() >= Status::Critical.rank()
-                    && prev_status.rank() < Status::Critical.rank()
-                    && last_alert.elapsed() > Duration::from_secs(300)
-                {
+                // Fire one notification for the worst window that newly needs
+                // attention — a fresh Critical/Depleted, a near-term projected
+                // exhaustion, or "critically low but resets soon". The 5 min
+                // cooldown and the per-window de-dup set keep it from nagging.
+                let now = Local::now();
+                let due = alerts_due(&snap, &alert_state, now);
+                if !due.is_empty() && last_alert.elapsed() > Duration::from_secs(300) {
                     let lang = Lang::from_pref(&language_pref);
-                    let (title, body) = alert_text(&snap, lang);
+                    let (title, body) = alert_text(&due, lang);
                     notification::show_alert(
                         dashboard.hwnd(),
                         dashboard.alive_flag(),
                         &title,
                         &body,
                     );
+                    alert_state.mark_fired(&due);
                     last_alert = Instant::now();
                 }
-                prev_status = worst;
+                alert_state.prune(&snap, now);
                 let lang = Lang::from_pref(&language_pref);
                 #[cfg(windows)]
                 update_tray(&mut tray, &snap, lang);
                 #[cfg(target_os = "linux")]
                 if let Some(handle) = &tray {
-                    tray_linux::update(handle, worst, tooltip(&snap, lang), lang);
+                    tray_linux::update(handle, snap.worst_status(), tooltip(&snap, lang), lang);
                 }
                 dashboard.push(&snap);
                 last = Some(snap);
@@ -313,7 +318,11 @@ async fn main() {
                             .as_ref()
                             .map(|s| tooltip(s, lang))
                             .unwrap_or_else(|| l.tray_loading.to_string());
-                        tray_linux::update(handle, prev_status, tooltip_text, lang);
+                        let status = last
+                            .as_ref()
+                            .map(|s| s.worst_status())
+                            .unwrap_or(Status::Healthy);
+                        tray_linux::update(handle, status, tooltip_text, lang);
                     }
                     spawn_set_language(&monitor, language);
                 }
@@ -571,48 +580,190 @@ fn open_url(target: &str) {
     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
 }
 
-/// Build the title + body for a critical/depleted alert notification.
-fn alert_text(snap: &Snapshot, lang: Lang) -> (String, String) {
-    let mut worst = Status::Healthy;
-    let mut label = String::new();
-    let mut provider = String::new();
-    let mut pct = 0u32;
+/// One notification-worthy condition on a single usage window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Alert {
+    /// Provider display name, e.g. "Claude".
+    provider: String,
+    /// Window display label, e.g. "SESSION".
+    label: String,
+    /// Remaining percentage at the time the alert was raised.
+    pct: u32,
+    kind: AlertKind,
+    /// `"{provider_id}:{window_key}:{kind_tag}"` — the de-dup identity.
+    dedup_key: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertKind {
+    /// Window just dropped into the Critical band (1–19%).
+    EnteredCritical,
+    /// Window is at 0% (or has no data).
+    Depleted,
+    /// Not Critical yet, but the projection says it hits 0% in `.0` minutes.
+    ExhaustsSoon(i64),
+    /// Critically low, but the window resets in `.0` minutes — just wait.
+    ResetsSoon(i64),
+}
+
+impl AlertKind {
+    /// Stable identity for de-dup (independent of the minutes value).
+    fn tag(self) -> &'static str {
+        match self {
+            AlertKind::EnteredCritical => "critical",
+            AlertKind::Depleted => "depleted",
+            AlertKind::ExhaustsSoon(_) => "exhausts",
+            AlertKind::ResetsSoon(_) => "resets",
+        }
+    }
+
+    /// Higher == show this one first when several fire at once.
+    fn severity(self) -> u8 {
+        match self {
+            AlertKind::Depleted => 3,
+            AlertKind::EnteredCritical | AlertKind::ResetsSoon(_) => 2,
+            AlertKind::ExhaustsSoon(_) => 1,
+        }
+    }
+}
+
+/// Remembers which per-window alerts already fired, so a window that stays
+/// Critical doesn't re-notify on every 5–60 s refresh.
+#[derive(Default)]
+struct AlertState {
+    fired: HashSet<String>,
+}
+
+impl AlertState {
+    fn mark_fired(&mut self, alerts: &[Alert]) {
+        for a in alerts {
+            self.fired.insert(a.dedup_key.clone());
+        }
+    }
+
+    /// Forget remembered alerts whose window no longer warrants one (recovered,
+    /// reset, projection cleared, or the provider vanished) so a later
+    /// regression alerts again.
+    fn prune(&mut self, snap: &Snapshot, now: DateTime<Local>) {
+        self.fired.retain(|key| {
+            let mut parts = key.splitn(3, ':');
+            let (Some(pid), Some(wkey), Some(tag)) = (parts.next(), parts.next(), parts.next())
+            else {
+                return false;
+            };
+            snap.providers
+                .iter()
+                .find(|p| p.id == pid && p.available)
+                .and_then(|p| p.windows.iter().find(|w| w.key == wkey))
+                .and_then(|w| classify(w, now))
+                .is_some_and(|k| k.tag() == tag)
+        });
+    }
+}
+
+/// Minutes from `now` until `rfc` (an RFC3339 timestamp). `None` if unparseable
+/// or already in the past.
+fn minutes_until(rfc: &str, now: DateTime<Local>) -> Option<i64> {
+    let target = DateTime::parse_from_rfc3339(rfc).ok()?.with_timezone(&Local);
+    let mins = (target - now).num_minutes();
+    (mins >= 0).then_some(mins)
+}
+
+/// The single most useful alert for one window right now, if any.
+fn classify(w: &WindowUsage, now: DateTime<Local>) -> Option<AlertKind> {
+    let in_trouble = matches!(w.status, Status::Critical | Status::Depleted);
+
+    if in_trouble {
+        // A reset within reach beats "you're critical" — the action is to wait.
+        if let Some(mins) = w.reset_at.as_deref().and_then(|r| minutes_until(r, now)) {
+            if mins < 20 {
+                return Some(AlertKind::ResetsSoon(mins));
+            }
+        }
+        return Some(match w.status {
+            Status::Depleted => AlertKind::Depleted,
+            _ => AlertKind::EnteredCritical,
+        });
+    }
+
+    // Not Critical yet — warn only if the projection says it will be, soon.
+    // `estimated_exhaustion` is already gated (enough history, actually
+    // declining, resets after it would run out) by the monitor.
+    let mins = w
+        .estimated_exhaustion
+        .as_deref()
+        .and_then(|e| minutes_until(e, now))?;
+    (mins < 30).then_some(AlertKind::ExhaustsSoon(mins))
+}
+
+/// Every window that should raise a notification this refresh and hasn't yet.
+fn alerts_due(snap: &Snapshot, state: &AlertState, now: DateTime<Local>) -> Vec<Alert> {
+    let mut due = Vec::new();
     for p in &snap.providers {
-        if !p.available { continue; }
+        if !p.available {
+            continue;
+        }
         for w in &p.windows {
-            if w.status.rank() > worst.rank() {
-                worst = w.status;
-                label = w.label.clone();
-                provider = p.name.clone();
-                pct = w.remaining_pct;
+            let Some(kind) = classify(w, now) else { continue };
+            let dedup_key = format!("{}:{}:{}", p.id, w.key, kind.tag());
+            if !state.fired.contains(&dedup_key) {
+                due.push(Alert {
+                    provider: p.name.clone(),
+                    label: w.label.clone(),
+                    pct: w.remaining_pct,
+                    kind,
+                    dedup_key,
+                });
             }
         }
     }
+    due
+}
+
+/// Build the notification title + body from the worst of the due alerts.
+fn alert_text(due: &[Alert], lang: Lang) -> (String, String) {
     let l = catalog(lang);
-    let title = match worst {
-        Status::Critical => l.alert_critical_title.to_string(),
-        Status::Depleted => l.alert_depleted_title.to_string(),
-        _ => l.alert_generic_title.to_string(),
+    let a = due
+        .iter()
+        .max_by_key(|a| a.kind.severity())
+        .expect("alert_text called with no alerts");
+    let title = match a.kind {
+        AlertKind::Depleted => l.alert_depleted_title,
+        AlertKind::EnteredCritical => l.alert_critical_title,
+        AlertKind::ExhaustsSoon(_) | AlertKind::ResetsSoon(_) => l.alert_predictive_title,
+    }
+    .to_string();
+    let fill = |s: &str| {
+        s.replace("{provider}", &a.provider)
+            .replace("{label}", &a.label)
+            .replace("{pct}", &a.pct.to_string())
     };
-    let body = if pct == 0 {
-        l.alert_body_exhausted
-            .replace("{provider}", &provider)
-            .replace("{label}", &label)
-    } else {
-        l.alert_body_remaining
-            .replace("{provider}", &provider)
-            .replace("{label}", &label)
-            .replace("{pct}", &pct.to_string())
+    let body = match a.kind {
+        AlertKind::Depleted => fill(l.alert_body_exhausted),
+        AlertKind::EnteredCritical => fill(l.alert_body_remaining),
+        AlertKind::ExhaustsSoon(m) => fill(l.alert_predictive_body).replace("{mins}", &m.to_string()),
+        AlertKind::ResetsSoon(m) => fill(l.alert_reset_soon_body).replace("{mins}", &m.to_string()),
     };
     (title, body)
 }
 
+/// Short relative time like "1h 5m" / "12m" until `rfc`; `None` if past/unparseable.
+fn relative_until(rfc: &str, now: DateTime<Local>) -> Option<String> {
+    let mins = minutes_until(rfc, now)?;
+    Some(if mins >= 60 {
+        format!("{}h {}m", mins / 60, mins % 60)
+    } else {
+        format!("{mins}m")
+    })
+}
+
+/// Tray tooltip text: Claude keeps its familiar SESSION%/WEEKLY% line; otherwise
+/// (or when Claude has no such windows) show the single worst window across every
+/// visible provider, with its reset countdown.
 fn tooltip(snap: &Snapshot, lang: Lang) -> String {
-    if let Some(claude) = snap
-        .providers
-        .iter()
-        .find(|p| p.id == "claude" && p.available)
-    {
+    let l = catalog(lang);
+
+    if let Some(claude) = snap.providers.iter().find(|p| p.id == "claude" && p.available) {
         let pct = |key: &str| {
             claude
                 .windows
@@ -621,12 +772,146 @@ fn tooltip(snap: &Snapshot, lang: Lang) -> String {
                 .map(|w| w.remaining_pct)
         };
         if let (Some(s), Some(w)) = (pct("session"), pct("weekly")) {
-            let l = catalog(lang);
             return format!(
                 "ClaudTray — {} {}% · {} {}%",
                 l.tooltip_session, s, l.tooltip_weekly, w
             );
         }
     }
-    catalog(lang).tooltip_default.to_string()
+
+    let worst = snap
+        .providers
+        .iter()
+        .filter(|p| p.available)
+        .flat_map(|p| p.windows.iter().map(move |w| (p, w)))
+        .max_by_key(|(_, w)| w.status.rank());
+
+    let Some((p, w)) = worst else {
+        return l.tooltip_default.to_string();
+    };
+    let mut line = format!("ClaudTray — {} {} {}%", p.name, w.label, w.remaining_pct);
+    if let Some(rel) = w
+        .reset_at
+        .as_deref()
+        .and_then(|r| relative_until(r, Local::now()))
+    {
+        line.push_str(&format!(" · {} {}", l.tooltip_reset, rel));
+    }
+    line
+}
+
+#[cfg(test)]
+mod alert_tests {
+    use super::*;
+    use crate::model::ProviderSnapshot;
+
+    fn window(pct: u32, reset_at: Option<String>, exhaustion: Option<String>) -> WindowUsage {
+        let mut w = WindowUsage::from_percent("session", "SESSION", pct, reset_at);
+        w.estimated_exhaustion = exhaustion;
+        w
+    }
+
+    fn snapshot(id: &str, name: &str, windows: Vec<WindowUsage>) -> Snapshot {
+        Snapshot {
+            updated_at: String::new(),
+            theme: "dark".into(),
+            language: "en".into(),
+            resolved_language: "en".into(),
+            providers: vec![ProviderSnapshot {
+                id: id.into(),
+                name: name.into(),
+                available: true,
+                note: None,
+                windows,
+                total_tokens: None,
+                estimated_cost_usd: None,
+                local_models: Vec::new(),
+                active_sessions: Vec::new(),
+                stale_secs: None,
+            }],
+            catalog: Vec::new(),
+            history: Default::default(),
+        }
+    }
+
+    #[test]
+    fn direct_drop_to_zero_fires_depleted() {
+        // Regression: the old gate compared against Status::Critical.rank(),
+        // and Depleted ranks below Critical, so a straight fall to 0% never
+        // alerted.
+        let snap = snapshot("claude", "Claude", vec![window(0, None, None)]);
+        let due = alerts_due(&snap, &AlertState::default(), Local::now());
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].kind, AlertKind::Depleted);
+    }
+
+    #[test]
+    fn exhausts_soon_fires_once() {
+        let now = Local::now();
+        let exhaustion = (now + chrono::Duration::minutes(15)).to_rfc3339();
+        let snap = snapshot("claude", "Claude", vec![window(40, None, Some(exhaustion))]);
+
+        let mut state = AlertState::default();
+        let due = alerts_due(&snap, &state, now);
+        assert_eq!(due.len(), 1);
+        assert!(matches!(due[0].kind, AlertKind::ExhaustsSoon(_)));
+
+        state.mark_fired(&due);
+        assert!(
+            alerts_due(&snap, &state, now).is_empty(),
+            "same window must not re-alert once fired"
+        );
+    }
+
+    #[test]
+    fn reset_soon_preferred_over_exhaustion() {
+        let now = Local::now();
+        let reset = (now + chrono::Duration::minutes(10)).to_rfc3339();
+        let exhaustion = (now + chrono::Duration::minutes(5)).to_rfc3339();
+        let snap = snapshot(
+            "claude",
+            "Claude",
+            vec![window(10, Some(reset), Some(exhaustion))],
+        );
+        let due = alerts_due(&snap, &AlertState::default(), now);
+        assert_eq!(due.len(), 1);
+        assert!(matches!(due[0].kind, AlertKind::ResetsSoon(_)));
+    }
+
+    #[test]
+    fn recovered_window_alerts_again_after_prune() {
+        let now = Local::now();
+        let bad = snapshot("claude", "Claude", vec![window(0, None, None)]);
+        let mut state = AlertState::default();
+        state.mark_fired(&alerts_due(&bad, &state, now));
+
+        let good = snapshot("claude", "Claude", vec![window(80, None, None)]);
+        state.prune(&good, now);
+        state.prune(&bad, now); // back to zero later
+
+        assert_eq!(alerts_due(&bad, &state, now).len(), 1);
+    }
+
+    #[test]
+    fn tooltip_shows_worst_non_claude_window() {
+        let snap = snapshot("copilot", "Copilot", vec![window(12, None, None)]);
+        let t = tooltip(&snap, Lang::En);
+        assert!(t.contains("Copilot"), "got: {t}");
+        assert!(t.contains("12%"), "got: {t}");
+    }
+
+    #[test]
+    fn tooltip_keeps_claude_session_weekly_line() {
+        let snap = snapshot(
+            "claude",
+            "Claude",
+            vec![
+                WindowUsage::from_percent("session", "SESSION", 50, None),
+                WindowUsage::from_percent("weekly", "WEEKLY", 80, None),
+            ],
+        );
+        let t = tooltip(&snap, Lang::En);
+        assert!(t.contains("SESSION 50%"), "got: {t}");
+        assert!(t.contains("WEEKLY 80%"), "got: {t}");
+    }
 }

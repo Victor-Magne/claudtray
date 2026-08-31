@@ -1,0 +1,6 @@
+{
+  "copilot_plan": "copilot_enterprise",
+  "quota_snapshots": {
+    "premium_interactions": { "unlimited": true }
+  }
+}

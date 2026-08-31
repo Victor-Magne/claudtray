@@ -78,6 +78,7 @@ impl OpenRouterProvider {
             estimated_cost_usd: None,
             local_models: Vec::new(),
             active_sessions: Vec::new(),
+            stale_secs: None,
         }
     }
 }
@@ -103,4 +104,39 @@ fn fetch(key: &str) -> Option<KeyData> {
         let parsed: KeyResp = serde_json::from_str(&text).ok()?;
         parsed.data
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Status;
+
+    fn data(fixture: &str) -> KeyData {
+        serde_json::from_str::<KeyResp>(fixture).unwrap().data.unwrap()
+    }
+
+    #[test]
+    fn build_reports_remaining_credit_percentage() {
+        let snap = OpenRouterProvider.build(data(include_str!(
+            "../../tests/fixtures/openrouter/key_paid.json"
+        )));
+        assert!(snap.available);
+        let w = &snap.windows[0];
+        assert_eq!(w.key, "credits");
+        assert_eq!(w.remaining_pct, 65); // 1 - 3.5/10
+        assert_eq!(w.status, Status::Healthy);
+        assert_eq!(w.budget, 1000); // limit in cents
+        assert_eq!(w.used_tokens, 350); // usage in cents
+    }
+
+    #[test]
+    fn build_shows_infinite_window_for_free_tier() {
+        let snap = OpenRouterProvider.build(data(include_str!(
+            "../../tests/fixtures/openrouter/key_free.json"
+        )));
+        let w = &snap.windows[0];
+        assert_eq!(w.label, "CRÉDITOS ∞");
+        assert_eq!(w.remaining_pct, 100);
+        assert_eq!(snap.note.as_deref(), Some("Plano gratuito"));
+    }
 }

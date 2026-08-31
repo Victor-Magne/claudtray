@@ -84,3 +84,21 @@ where
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_valid_proxy_requires_http_scheme_and_a_host() {
+        assert!(is_valid_proxy("http://proxy.local:8080"));
+        assert!(is_valid_proxy("https://10.0.0.1:3128"));
+        assert!(is_valid_proxy("http://user:pass@proxy.local:8080"));
+
+        assert!(!is_valid_proxy("socks5://proxy.local:1080"));
+        assert!(!is_valid_proxy("http://"));
+        assert!(!is_valid_proxy("proxy.local:8080"));
+        assert!(!is_valid_proxy(""));
+        assert!(!is_valid_proxy("http://bad host/"));
+    }
+}

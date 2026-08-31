@@ -98,3 +98,19 @@ fn collect_jsonl(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_from_epoch_formats_a_parseable_rfc3339() {
+        let s = reset_from_epoch(1_768_500_000).expect("valid epoch");
+        assert!(DateTime::parse_from_rfc3339(&s).is_ok());
+    }
+
+    #[test]
+    fn reset_from_epoch_rejects_out_of_range() {
+        assert!(reset_from_epoch(i64::MAX).is_none());
+    }
+}

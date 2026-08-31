@@ -131,6 +131,12 @@ pub struct ProviderSnapshot {
     /// Active Claude Code sessions (IDE integrations), detected from lock files.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_sessions: Vec<ActiveSession>,
+    /// Seconds since this snapshot was last refreshed successfully. `None` while
+    /// the data is fresh; set by the monitor when it serves a provider's last
+    /// good snapshot after a failure (see `STALE_TTL`), so the UI can flag that
+    /// the numbers are no longer live instead of showing stale data as current.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_secs: Option<u64>,
 }
 
 impl ProviderSnapshot {
@@ -145,6 +151,7 @@ impl ProviderSnapshot {
             estimated_cost_usd: None,
             local_models: Vec::new(),
             active_sessions: Vec::new(),
+            stale_secs: None,
         }
     }
 }
