@@ -827,6 +827,7 @@ mod alert_tests {
                 estimated_cost_usd: None,
                 local_models: Vec::new(),
                 active_sessions: Vec::new(),
+                stale_secs: None,
             }],
             catalog: Vec::new(),
             history: Default::default(),

@@ -54,6 +54,7 @@ impl Provider for AntigravityProvider {
                             estimated_cost_usd: None,
                             local_models: Vec::new(),
                             active_sessions: Vec::new(),
+                            stale_secs: None,
                         };
                     }
                 }

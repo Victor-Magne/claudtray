@@ -133,6 +133,7 @@ impl ClaudeProvider {
             estimated_cost_usd: Some(estimated_cost_usd),
             local_models: Vec::new(),
             active_sessions: detect_ide_sessions(),
+            stale_secs: None,
         }
     }
 }

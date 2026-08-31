@@ -86,6 +86,7 @@ impl Provider for OllamaProvider {
             estimated_cost_usd: None,
             local_models,
             active_sessions: Vec::new(),
+            stale_secs: None,
         }
     }
 }
