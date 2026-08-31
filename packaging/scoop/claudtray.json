@@ -1,10 +1,10 @@
 {
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Real-time AI usage monitor (Claude Code, Copilot, Codex) in the Windows system tray",
   "homepage": "https://github.com/Victor-Magne/claudtray",
   "license": "MIT",
-  "url": "https://github.com/Victor-Magne/claudtray/releases/download/v1.3.0/ClaudTray-1.3.0-portable.exe#/claudtray.exe",
-  "hash": "sha256:ac9c117d3e33b16d497f1fa71d229f3d382c99d0fa0893b4bb7ae6e96bc2b51b",
+  "url": "https://github.com/Victor-Magne/claudtray/releases/download/v1.4.0/ClaudTray-1.4.0-portable.exe#/claudtray.exe",
+  "hash": "sha256:dcc729cc2da1396b1af30012d5b4f8d27aa2b8f00c2876cfeccf7f3bcc113b5b",
   "bin": "claudtray.exe",
   "shortcuts": [
     ["claudtray.exe", "ClaudTray"]
