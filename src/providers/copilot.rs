@@ -153,3 +153,40 @@ fn token_from_gh_hosts() -> Option<String> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Status;
+
+    fn build(fixture: &str) -> ProviderSnapshot {
+        CopilotProvider.build(serde_json::from_str::<UserResp>(fixture).unwrap())
+    }
+
+    #[test]
+    fn build_uses_percent_remaining_when_present() {
+        let snap = build(include_str!("../../tests/fixtures/copilot/user_limited.json"));
+        assert!(snap.available);
+        let w = &snap.windows[0];
+        assert_eq!(w.key, "premium");
+        assert_eq!(w.label, "PREMIUM");
+        assert_eq!(w.remaining_pct, 25);
+        assert_eq!(w.status, Status::Warning);
+    }
+
+    #[test]
+    fn build_marks_unlimited_plans() {
+        let snap = build(include_str!("../../tests/fixtures/copilot/user_unlimited.json"));
+        let w = &snap.windows[0];
+        assert_eq!(w.label, "PREMIUM ∞");
+        assert_eq!(w.remaining_pct, 100);
+    }
+
+    #[test]
+    fn build_falls_back_to_entitlement_ratio() {
+        let snap = build(include_str!("../../tests/fixtures/copilot/user_entitlement.json"));
+        let w = &snap.windows[0];
+        assert_eq!(w.remaining_pct, 10); // 30 / 300
+        assert_eq!(w.status, Status::Critical);
+    }
+}

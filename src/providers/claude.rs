@@ -415,6 +415,7 @@ fn fetch_usage(token: &str) -> Result<UsageResponse, FetchError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Status;
 
     #[test]
     fn load_token_uses_only_the_user_provided_state_token() {
@@ -426,5 +427,57 @@ mod tests {
 
         state.claude_token = Some("sk-ant-oat01-test".to_string());
         assert_eq!(load_token(&state).as_deref(), Some("sk-ant-oat01-test"));
+    }
+
+    #[test]
+    fn window_reports_remaining_as_100_minus_utilization() {
+        let resp: UsageResponse =
+            serde_json::from_str(include_str!("../../tests/fixtures/claude/usage.json")).unwrap();
+
+        let session = window("session", "SESSION", resp.five_hour.unwrap());
+        assert_eq!(session.remaining_pct, 58); // 100 - 42.5, rounded
+        assert_eq!(session.status, Status::Healthy);
+        assert!(session.reset_at.is_some());
+
+        let opus = window("opus", "OPUS", resp.seven_day_opus.unwrap());
+        assert_eq!(opus.remaining_pct, 12);
+        assert_eq!(opus.status, Status::Critical);
+    }
+
+    #[test]
+    fn window_handles_a_fully_consumed_quota() {
+        let resp: UsageResponse =
+            serde_json::from_str(include_str!("../../tests/fixtures/claude/usage_exhausted.json"))
+                .unwrap();
+        let session = window("session", "SESSION", resp.five_hour.unwrap());
+        assert_eq!(session.remaining_pct, 0);
+        assert_eq!(session.status, Status::Depleted);
+    }
+
+    #[test]
+    fn parse_reset_accepts_iso_string_and_epoch() {
+        assert!(parse_reset(&serde_json::json!("2026-01-15T18:00:00Z")).is_some());
+        assert!(parse_reset(&serde_json::json!(1_768_500_000_i64)).is_some());
+        assert!(parse_reset(&serde_json::json!("not-a-date")).is_none());
+    }
+
+    #[test]
+    fn extract_usage_sums_all_token_buckets() {
+        let lines = include_str!("../../tests/fixtures/claude/log_lines.jsonl");
+        let mut tokens = 0u64;
+        let mut cost = 0.0f64;
+        for line in lines.lines() {
+            let v: serde_json::Value = match serde_json::from_str(line) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if let Some((t, c)) = extract_usage(&v) {
+                tokens += t;
+                cost += c;
+            }
+        }
+        // line 1: 1000 + 500 + 200 + 4000 ; line 3: 10 + 20
+        assert_eq!(tokens, 5730);
+        assert!(cost > 0.0);
     }
 }

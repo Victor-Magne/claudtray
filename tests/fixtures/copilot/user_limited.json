@@ -1,0 +1,11 @@
+{
+  "copilot_plan": "copilot_pro",
+  "quota_snapshots": {
+    "premium_interactions": {
+      "entitlement": 300,
+      "remaining": 75,
+      "percent_remaining": 25.0,
+      "unlimited": false
+    }
+  }
+}

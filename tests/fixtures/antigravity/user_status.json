@@ -1,0 +1,15 @@
+{
+  "userStatus": {
+    "cascadeModelConfigData": {
+      "clientModelConfigs": [
+        { "label": "Gemini 2.5 Pro", "quotaInfo": { "remainingFraction": 0.73, "resetTime": "2026-01-16T00:00:00Z" } },
+        { "label": "Gemini 2.5 Flash", "quotaInfo": { "remainingFraction": 0.10 } },
+        { "label": "Claude Sonnet", "quotaInfo": { "remainingFraction": 0.0 } },
+        { "label": "Model 4", "quotaInfo": { "remainingFraction": 0.5 } },
+        { "label": "Model 5", "quotaInfo": { "remainingFraction": 0.5 } },
+        { "label": "Model 6", "quotaInfo": { "remainingFraction": 0.5 } },
+        { "label": "Model 7 (over cap)", "quotaInfo": { "remainingFraction": 0.5 } }
+      ]
+    }
+  }
+}

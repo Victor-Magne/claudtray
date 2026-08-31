@@ -68,21 +68,7 @@ impl Provider for OllamaProvider {
         }
 
         let running = fetch_running().unwrap_or_default();
-
-        let local_models: Vec<LocalModelInfo> = tags
-            .into_iter()
-            .map(|m| {
-                let name = m.name.unwrap_or_default();
-                let loaded = running.iter().any(|r| r == &name);
-                LocalModelInfo {
-                    loaded,
-                    size_bytes: m.size.unwrap_or(0),
-                    parameter_size: m.details.as_ref().and_then(|d| d.parameter_size.clone()),
-                    quantization: m.details.as_ref().and_then(|d| d.quantization_level.clone()),
-                    name,
-                }
-            })
-            .collect();
+        let local_models = merge_models(tags, &running);
 
         let note = format!(
             "{} modelo(s) · {} a correr",
@@ -120,6 +106,24 @@ fn fetch_tags() -> Option<Vec<TagModel>> {
     Some(parsed.models.unwrap_or_default())
 }
 
+/// Turn the `/api/tags` list into [`LocalModelInfo`], flagging the ones whose
+/// name appears in the `/api/ps` running set.
+fn merge_models(tags: Vec<TagModel>, running: &[String]) -> Vec<LocalModelInfo> {
+    tags.into_iter()
+        .map(|m| {
+            let name = m.name.unwrap_or_default();
+            let loaded = running.iter().any(|r| r == &name);
+            LocalModelInfo {
+                loaded,
+                size_bytes: m.size.unwrap_or(0),
+                parameter_size: m.details.as_ref().and_then(|d| d.parameter_size.clone()),
+                quantization: m.details.as_ref().and_then(|d| d.quantization_level.clone()),
+                name,
+            }
+        })
+        .collect()
+}
+
 fn fetch_running() -> Option<Vec<String>> {
     let url = format!("{BASE}/api/ps");
     let mut resp = agent(false).get(&url).call().ok()?;
@@ -141,4 +145,31 @@ fn fetch_running() -> Option<Vec<String>> {
             .filter_map(|m| m.name)
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_models_flags_running_models() {
+        let tags: TagsResp =
+            serde_json::from_str(include_str!("../../tests/fixtures/ollama/tags.json")).unwrap();
+        let ps: PsResp =
+            serde_json::from_str(include_str!("../../tests/fixtures/ollama/ps.json")).unwrap();
+        let running: Vec<String> =
+            ps.models.unwrap_or_default().into_iter().filter_map(|m| m.name).collect();
+
+        let merged = merge_models(tags.models.unwrap_or_default(), &running);
+        assert_eq!(merged.len(), 2);
+
+        let llama = &merged[0];
+        assert_eq!(llama.name, "llama3:8b");
+        assert!(llama.loaded);
+        assert_eq!(llama.size_bytes, 4_700_000_000);
+        assert_eq!(llama.parameter_size.as_deref(), Some("8B"));
+
+        assert_eq!(merged[1].name, "mistral:7b");
+        assert!(!merged[1].loaded);
+    }
 }

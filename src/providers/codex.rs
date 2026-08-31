@@ -82,9 +82,15 @@ impl Provider for CodexProvider {
     }
 }
 
-/// Scan a rollout for the last `token_count` event carrying rate limits.
+/// Scan a rollout file for the last `token_count` event carrying rate limits.
 fn latest_rate_limits(path: &std::path::Path) -> Option<RateLimits> {
     let content = std::fs::read_to_string(path).ok()?;
+    parse_rate_limits(&content)
+}
+
+/// Last `token_count` event carrying rate limits in a rollout's JSONL text.
+/// Unparseable lines are skipped.
+fn parse_rate_limits(content: &str) -> Option<RateLimits> {
     let mut last = None;
     for line in content.lines() {
         let Ok(parsed) = serde_json::from_str::<Line>(line) else {
@@ -118,5 +124,50 @@ fn window_label(minutes: Option<i64>, fallback_key: &str) -> (String, String) {
         43200 => ("monthly".into(), "MENSAL".into()),
         m if m > 0 => (fallback_key.to_string(), format!("{}H", m / 60)),
         _ => (fallback_key.to_string(), "LIMITE".into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Status;
+
+    #[test]
+    fn parse_rate_limits_keeps_the_last_token_count_event() {
+        let rl = parse_rate_limits(include_str!("../../tests/fixtures/codex/session.jsonl"))
+            .expect("fixture has token_count events");
+
+        let primary = window(rl.primary.unwrap(), "primary").unwrap();
+        assert_eq!(primary.key, "session");
+        assert_eq!(primary.label, "5H");
+        assert_eq!(primary.remaining_pct, 45); // last event: 55% used
+        assert_eq!(primary.status, Status::Warning);
+        assert!(primary.reset_at.is_some());
+
+        let secondary = window(rl.secondary.unwrap(), "secondary").unwrap();
+        assert_eq!(secondary.key, "weekly");
+        assert_eq!(secondary.label, "SEMANAL");
+        assert_eq!(secondary.remaining_pct, 58); // last event: 42% used
+    }
+
+    #[test]
+    fn parse_rate_limits_returns_none_without_a_token_count_event() {
+        assert!(parse_rate_limits("{\"payload\":{\"type\":\"session_meta\"}}\nnot json").is_none());
+    }
+
+    #[test]
+    fn window_needs_a_used_percent() {
+        let w = Window { used_percent: None, window_minutes: Some(300), resets_at: None };
+        assert!(window(w, "primary").is_none());
+    }
+
+    #[test]
+    fn window_label_maps_known_durations() {
+        assert_eq!(window_label(Some(300), "x"), ("session".to_string(), "5H".to_string()));
+        assert_eq!(window_label(Some(1440), "x"), ("daily".to_string(), "DIÁRIO".to_string()));
+        assert_eq!(window_label(Some(10080), "x"), ("weekly".to_string(), "SEMANAL".to_string()));
+        assert_eq!(window_label(Some(43200), "x"), ("monthly".to_string(), "MENSAL".to_string()));
+        assert_eq!(window_label(Some(120), "fb"), ("fb".to_string(), "2H".to_string()));
+        assert_eq!(window_label(None, "fb"), ("fb".to_string(), "LIMITE".to_string()));
     }
 }
