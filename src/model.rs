@@ -52,6 +52,12 @@ pub struct WindowUsage {
     /// RFC3339 (local offset) timestamp of when the window resets. `None` if
     /// unknown.
     pub reset_at: Option<String>,
+    /// RFC3339 (local offset) projection of when this window hits 0%, based on
+    /// its recent decline and capped at `reset_at`. `None` when there isn't
+    /// enough history, the window isn't declining, or it resets before it
+    /// would exhaust.
+    #[serde(default)]
+    pub estimated_exhaustion: Option<String>,
 }
 
 impl WindowUsage {
@@ -68,6 +74,7 @@ impl WindowUsage {
             remaining_pct,
             status: Status::from_remaining(remaining_pct, true),
             reset_at,
+            estimated_exhaustion: None,
         }
     }
 }
@@ -124,6 +131,12 @@ pub struct ProviderSnapshot {
     /// Active Claude Code sessions (IDE integrations), detected from lock files.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_sessions: Vec<ActiveSession>,
+    /// Seconds since this snapshot was last refreshed successfully. `None` while
+    /// the data is fresh; set by the monitor when it serves a provider's last
+    /// good snapshot after a failure (see `STALE_TTL`), so the UI can flag that
+    /// the numbers are no longer live instead of showing stale data as current.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stale_secs: Option<u64>,
 }
 
 impl ProviderSnapshot {
@@ -138,6 +151,7 @@ impl ProviderSnapshot {
             estimated_cost_usd: None,
             local_models: Vec::new(),
             active_sessions: Vec::new(),
+            stale_secs: None,
         }
     }
 }

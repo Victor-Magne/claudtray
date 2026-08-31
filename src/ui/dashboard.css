@@ -307,6 +307,15 @@ header .spacer {
   opacity: 0.5;
 }
 
+.stale-banner {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 14%, transparent);
+}
+
 /* status helpers */
 .s-healthy {
   background: var(--healthy);

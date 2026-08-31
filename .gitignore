@@ -1,6 +1,8 @@
 /target
 /installer_output
 .vs/
+/.rtk/
+/graphify-out/
 
 # Documentos internos (não publicados)
 ROADMAP.md

@@ -54,8 +54,10 @@ const STRINGS = {
     resetUnknown: "Reinicia: —",
     resetsNow: "Reinicia agora",
     resetsIn: "Reinicia em",
+    exhaustsIn: "Esgota em",
     justNow: "agora mesmo",
     updatedPrefix: "Atualizado ",
+    staleNote: "Sem resposta do provider —",
     agoSuffix: (n, unit) => `há ${n}${unit}`,
   },
   en: {
@@ -96,8 +98,10 @@ const STRINGS = {
     resetUnknown: "Resets: —",
     resetsNow: "Resets now",
     resetsIn: "Resets in",
+    exhaustsIn: "Runs out in",
     justNow: "just now",
     updatedPrefix: "Updated ",
+    staleNote: "No response from provider —",
     agoSuffix: (n, unit) => `${n}${unit} ago`,
   },
 };
@@ -231,6 +235,7 @@ function renderTabs() {
     el.className = "tab" + (p.id === activeProvider ? " active" : "");
     el.textContent = p.name;
     if (!p.available) el.style.opacity = "0.55";
+    if (p.stale_secs != null) el.title = t("staleNote") + " " + formatAgo(p.stale_secs);
     el.onclick = () => {
       activeProvider = p.id;
       render();
@@ -261,6 +266,13 @@ function renderCards() {
     div.appendChild(note);
     wrap.appendChild(div);
     return;
+  }
+
+  if (p.stale_secs != null) {
+    const stale = document.createElement("div");
+    stale.className = "stale-banner";
+    stale.textContent = t("staleNote") + " " + formatAgo(p.stale_secs);
+    wrap.appendChild(stale);
   }
 
   if (hasWindows) {
@@ -450,6 +462,17 @@ function card(w, wide) {
   el.appendChild(bar);
   el.appendChild(reset);
 
+  // Only shown when Rust could actually project one (enough history, still
+  // declining, resets before it would exhaust otherwise) — nothing to say
+  // in the other cases, so no placeholder row.
+  if (w.estimated_exhaustion) {
+    const exhaustion = document.createElement("div");
+    exhaustion.className = "reset exhaustion";
+    exhaustion.dataset.exhaustionAt = w.estimated_exhaustion;
+    exhaustion.textContent = exhaustionText(w.estimated_exhaustion);
+    el.appendChild(exhaustion);
+  }
+
   // Sparkline from history
   if (DATA && DATA.history) {
     const p = DATA.providers.find((x) => x.id === activeProvider);
@@ -479,6 +502,20 @@ function resetText(iso) {
   return t("resetsIn") + " " + rel + " · " + time;
 }
 
+function exhaustionText(iso) {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  const now = new Date();
+  const diff = d - now;
+  if (diff <= 0) return "";
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const mins = Math.floor(diff / 60000);
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  const rel = h > 0 ? h + "h " + m + "m" : m + "m";
+  return t("exhaustsIn") + " " + rel + " · " + time;
+}
+
 // Locale-aware relative time ("5s ago" vs "há 5s") — word order differs, so
 // this is a small function rather than a STRINGS entry.
 function formatAgo(secs) {
@@ -502,8 +539,11 @@ function renderUpdated() {
 // tick the relative labels + reset countdowns every second
 setInterval(() => {
   renderUpdated();
-  document.querySelectorAll(".reset").forEach((el) => {
+  document.querySelectorAll(".reset:not(.exhaustion)").forEach((el) => {
     el.textContent = resetText(el.dataset.resetAt);
+  });
+  document.querySelectorAll(".exhaustion").forEach((el) => {
+    el.textContent = exhaustionText(el.dataset.exhaustionAt);
   });
 }, 1000);
 

@@ -1,0 +1,5 @@
+{
+  "models": [
+    { "name": "llama3:8b" }
+  ]
+}

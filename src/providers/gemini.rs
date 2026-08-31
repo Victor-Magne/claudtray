@@ -49,6 +49,7 @@ impl Provider for GeminiProvider {
                 estimated_cost_usd: None,
                 local_models: Vec::new(),
                 active_sessions: Vec::new(),
+                stale_secs: None,
             },
             None => ProviderSnapshot::unavailable(
                 self.id(),
@@ -80,15 +81,40 @@ fn fetch(key: &str) -> Option<(usize, usize)> {
             .read_to_string()
             .ok()?;
         let parsed: ModelsResp = serde_json::from_str(&text).ok()?;
-        let models = parsed.models.unwrap_or_default();
-        let total = models.len();
-        let generative = models.iter().filter(|m| {
+        Some(count_models(&parsed))
+    })
+}
+
+/// `(total models, models that support `generateContent`)`.
+fn count_models(resp: &ModelsResp) -> (usize, usize) {
+    let models = resp.models.as_deref().unwrap_or_default();
+    let generative = models
+        .iter()
+        .filter(|m| {
             m.supported_generation_methods
                 .as_deref()
                 .unwrap_or_default()
                 .iter()
-                .any(|m| m == "generateContent")
-        }).count();
-        Some((total, generative))
-    })
+                .any(|method| method == "generateContent")
+        })
+        .count();
+    (models.len(), generative)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn count_models_counts_generative_methods() {
+        let resp: ModelsResp =
+            serde_json::from_str(include_str!("../../tests/fixtures/gemini/models.json")).unwrap();
+        assert_eq!(count_models(&resp), (4, 2));
+    }
+
+    #[test]
+    fn count_models_handles_missing_models_array() {
+        let resp: ModelsResp = serde_json::from_str("{}").unwrap();
+        assert_eq!(count_models(&resp), (0, 0));
+    }
 }
