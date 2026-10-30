@@ -30,6 +30,11 @@ Releases before 1.4.0 are only tagged in git and described in their
   rows that do not fit its 127-character limit are dropped whole.
 
 ### Changed
+- Opening the popover now refreshes at once every provider whose interval has
+  elapsed (the last snapshot is still painted instantly), and the background
+  ticker switches to the fast cadence immediately instead of finishing an up
+  to 60 s sleep. Providers still within their interval are not asked again, so
+  opening and closing repeatedly makes no extra requests.
 - Each provider now refreshes on its own minimum interval (Claude 90 s,
   Copilot and OpenRouter 5 min, Gemini 10 min; local Codex, Antigravity and
   Ollama every tick) instead of every provider on every 5 s tick, which caused

@@ -185,12 +185,20 @@ async fn main() {
     let dashboard_open = Arc::new(AtomicBool::new(true));
     let tick_proxy = proxy.clone();
     let ticker_open = Arc::clone(&dashboard_open);
+    // Visibility changes wake the ticker so it re-reads the cadence now instead
+    // of finishing a 60 s sleep picked while the popover was hidden.
+    let visibility_changed = Arc::new(tokio::sync::Notify::new());
+    let ticker_wake = Arc::clone(&visibility_changed);
     tokio::spawn(async move {
         loop {
-            let secs = if ticker_open.load(Ordering::Relaxed) { 5 } else { 60 };
-            tokio::time::sleep(Duration::from_secs(secs)).await;
-            if tick_proxy.send_event(UserEvent::Tick).is_err() {
-                break;
+            let delay = ticker_delay(ticker_open.load(Ordering::Relaxed));
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {
+                    if tick_proxy.send_event(UserEvent::Tick).is_err() {
+                        break;
+                    }
+                }
+                _ = ticker_wake.notified() => {}
             }
         }
     });
@@ -421,9 +429,29 @@ async fn main() {
         }
 
         // Keep the ticker cadence in sync with popover visibility (fast when
-        // open, slow when hidden).
-        dashboard_open.store(dashboard.is_visible(), Ordering::Relaxed);
+        // open, slow when hidden). On a hidden -> shown edge (tray click, menu,
+        // any path) also refresh at once: the last snapshot is already painted,
+        // and a non-forced refresh only touches providers whose TTL elapsed, so
+        // opening and closing repeatedly cannot cost extra remote requests.
+        let visible = dashboard.is_visible();
+        let was_open = dashboard_open.swap(visible, Ordering::Relaxed);
+        if was_open != visible {
+            visibility_changed.notify_one();
+            if popover_opened(was_open, visible) {
+                spawn_refresh(&monitor, &proxy, false);
+            }
+        }
     });
+}
+
+/// Background refresh cadence: fast while the popover is open, slow while hidden.
+fn ticker_delay(open: bool) -> Duration {
+    Duration::from_secs(if open { 5 } else { 60 })
+}
+
+/// True on the hidden -> shown edge, the only transition that requests a refresh.
+fn popover_opened(was_open: bool, now_open: bool) -> bool {
+    !was_open && now_open
 }
 
 /// Run a refresh on a background thread and deliver the snapshot to the UI. If a
@@ -1080,5 +1108,19 @@ mod alert_tests {
         let t = tooltip(&snap, Lang::En);
         assert!(t.contains("SESSION 50%"), "got: {t}");
         assert!(t.contains("WEEKLY 80%"), "got: {t}");
+    }
+
+    #[test]
+    fn ticker_is_fast_when_open_and_slow_when_hidden() {
+        assert_eq!(ticker_delay(true), Duration::from_secs(5));
+        assert_eq!(ticker_delay(false), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn only_the_hidden_to_shown_edge_requests_a_refresh() {
+        assert!(popover_opened(false, true));
+        assert!(!popover_opened(true, true));
+        assert!(!popover_opened(false, false));
+        assert!(!popover_opened(true, false));
     }
 }
