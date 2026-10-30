@@ -10,10 +10,21 @@ Releases before 1.4.0 are only tagged in git and described in their
 ## [Unreleased]
 
 ### Added
+- Claude page redesigned: a ring per quota window (filled with the share used,
+  with a tick where the elapsed time says you should be), pace ("30% under
+  pace", skipped in a window's first 3%), token consumption for today / week /
+  month with estimated cost, daily activity, tokens per model and the date of
+  your first record. Built from `~/.claude/projects`, de-duplicated by message
+  and cached per file so a relaunch only re-reads what changed.
+- Reset countdowns show days ("2d 3h 28m").
 - A "signed out" notification when Claude, Copilot or OpenRouter rejects your
   token (HTTP 401). It fires once per provider and again only after the
   provider has worked and then failed anew. A short-lived Claude Code CLI token
   picked up automatically (`auto-credentials` builds) never triggers it.
+
+### Fixed
+- Token totals no longer skip transcripts over 10 MB or past the 300 newest
+  files.
 
 ## [1.4.0] - 2026-08-31
 
