@@ -916,7 +916,7 @@ window.addEventListener("blur", function () {
   sendIpc({ type: "blur" });
 });
 
-// Close when the pointer leaves the popover. A layer-shell surface keeps (or
+// Close when the pointer leaves the popover (layer-shell only, see above). A layer-shell surface keeps (or
 // never gets) keyboard focus while the pointer wanders off, so neither blur nor
 // Focused(false) fires. The 400 ms hysteresis is cancelled by re-entering; it
 // is not armed while a button is held (press/drag) or the Settings overlay is
@@ -930,6 +930,9 @@ let leaveTimer = null;
 function armPointerLeave() {
   clearTimeout(leaveTimer);
   leaveTimer = null;
+  // Rust sets __POINTER_LEAVE only on a Wayland layer-shell surface; elsewhere
+  // blur/click-away already closes the popover and leaving the window is normal.
+  if (window.__POINTER_LEAVE !== true) return;
   if (pointerInside || pointerPressed) return;
   leaveTimer = setTimeout(() => {
     leaveTimer = null;

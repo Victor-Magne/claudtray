@@ -238,8 +238,17 @@ impl Dashboard {
 
         #[cfg(target_os = "linux")]
         let pointer_proxy = proxy.clone();
+        // Closing when the pointer leaves only makes sense where focus-based
+        // click-away cannot work: a Wayland layer-shell surface. On Windows, X11
+        // and ordinary GNOME/KDE toplevels blur already closes the popover, and
+        // the pointer wandering off the window is normal, so it stays off there.
+        #[cfg(target_os = "linux")]
+        let pointer_leave = layer_shell;
+        #[cfg(not(target_os = "linux"))]
+        let pointer_leave = false;
         let builder = WebViewBuilder::new_with_web_context(&mut context)
             .with_transparent(true)
+            .with_initialization_script(format!("window.__POINTER_LEAVE = {pointer_leave};"))
             .with_html(build_html())
             .with_ipc_handler(move |req| {
                 if let Some(msg) = parse_ipc(req.body()) {
@@ -255,7 +264,9 @@ impl Dashboard {
             .build_gtk(window.default_vbox().expect("janela gtk sem vbox"))
             .expect("falha ao criar o webview");
         #[cfg(target_os = "linux")]
-        watch_pointer(&webview, pointer_proxy);
+        if pointer_leave {
+            watch_pointer(&webview, pointer_proxy);
+        }
 
         Self {
             webview,

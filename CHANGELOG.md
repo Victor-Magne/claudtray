@@ -51,13 +51,19 @@ Releases before 1.4.0 are only tagged in git and described in their
   stale. Providers make one attempt per refresh instead of up to three with 1 s
   and 2 s sleeps between them; a failed one is retried by the next refresh
   rather than inside the same one.
-- Claude reads the usage cache shared with the DMS shell plugin
-  (`~/.claude/usage-cache.json`, read-only) when it is under 90 s old and
-  belongs to this machine's credentials, so both together make one request per
-  90 s instead of one each. The last good response is also kept in
+- Closing the popover when the pointer leaves it now applies only to a Wayland
+  layer-shell surface, where click-away cannot detect it. On Windows, X11 and
+  ordinary GNOME/KDE windows it stays off: losing focus already closes it.
+- Claude requests are rate-limited for every user, with or without any shell
+  plugin: one request per 90 s at most, the last good response kept in
   `~/.cache/ClaudTray/claude_usage_api.json` and shown (marked stale) when a
   request fails with 429, a network error or 5xx, instead of emptying the card.
   A rejected token (401/403) is never masked by those old numbers.
+- Optional extra for personal (`auto-credentials`) builds: if a shell plugin
+  such as DankMaterialShell's Claude Code Usage keeps
+  `~/.claude/usage-cache.json`, it is read (read-only) when under 90 s old and
+  belonging to this machine's credentials, so both together make one request
+  instead of two. Without that file nothing changes; public builds never read it.
 
 ### Fixed
 - A failing provider is no longer retried every 30 s forever: consecutive
