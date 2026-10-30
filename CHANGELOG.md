@@ -7,6 +7,14 @@ All notable changes to ClaudTray are documented here. The format is based on
 Releases before 1.4.0 are only tagged in git and described in their
 [GitHub release notes](https://github.com/Victor-Magne/claudtray/releases).
 
+## [Unreleased]
+
+### Added
+- A "signed out" notification when Claude, Copilot or OpenRouter rejects your
+  token (HTTP 401). It fires once per provider and again only after the
+  provider has worked and then failed anew. A short-lived Claude Code CLI token
+  picked up automatically (`auto-credentials` builds) never triggers it.
+
 ## [1.4.0] - 2026-08-31
 
 ### Added

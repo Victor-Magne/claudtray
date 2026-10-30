@@ -1,4 +1,4 @@
-use super::http::agent;
+use super::http::{agent, Failure};
 use super::Provider;
 use crate::model::{ProviderSnapshot, WindowUsage};
 use crate::state::AppState;
@@ -40,8 +40,13 @@ impl Provider for OpenRouterProvider {
         };
 
         match fetch(key) {
-            Some(data) => self.build(data),
-            None => ProviderSnapshot::unavailable(
+            Ok(data) => self.build(data),
+            Err(Failure::Auth) => ProviderSnapshot::signed_out(
+                self.id(),
+                self.name(),
+                "API key rejeitada — atualiza-a nas definições",
+            ),
+            Err(Failure::Other) => ProviderSnapshot::unavailable(
                 self.id(),
                 self.name(),
                 "Falha ao obter créditos (key inválida?)",
@@ -79,21 +84,29 @@ impl OpenRouterProvider {
             local_models: Vec::new(),
             active_sessions: Vec::new(),
             stale_secs: None,
+            auth_failed: false,
         }
     }
 }
 
-fn fetch(key: &str) -> Option<KeyData> {
+fn fetch(key: &str) -> Result<KeyData, Failure> {
     let key = key.to_string();
-    super::http::with_retry(3, 1, || {
+    let rejected = std::cell::Cell::new(false);
+    let data = super::http::with_retry(3, 1, || {
         let mut resp = agent(false)
             .get("https://openrouter.ai/api/v1/auth/key")
             .header("Authorization", format!("Bearer {key}"))
             .header("User-Agent", "ClaudTray")
             .call()
             .ok()?;
-        if resp.status().as_u16() != 200 {
-            return None;
+        match resp.status().as_u16() {
+            200 => {}
+            // 401 = bad key; 402 only means out of credits.
+            401 => {
+                rejected.set(true);
+                return None;
+            }
+            _ => return None,
         }
         let text = resp
             .body_mut()
@@ -103,7 +116,8 @@ fn fetch(key: &str) -> Option<KeyData> {
             .ok()?;
         let parsed: KeyResp = serde_json::from_str(&text).ok()?;
         parsed.data
-    })
+    });
+    data.ok_or(if rejected.get() { Failure::Auth } else { Failure::Other })
 }
 
 #[cfg(test)]

@@ -87,6 +87,7 @@ impl Provider for OllamaProvider {
             local_models,
             active_sessions: Vec::new(),
             stale_secs: None,
+            auth_failed: false,
         }
     }
 }

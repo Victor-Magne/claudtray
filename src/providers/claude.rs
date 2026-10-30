@@ -66,11 +66,16 @@ impl Provider for ClaudeProvider {
 
         match fetch_usage(&token) {
             Ok(resp) => self.build(resp),
-            Err(FetchError::Auth) => ProviderSnapshot::unavailable(
-                self.id(),
-                self.name(),
-                "Token inválido/expirado — gera um novo com `claude setup-token`",
-            ),
+            Err(FetchError::Auth) => {
+                let note = "Token inválido/expirado — gera um novo com `claude setup-token`";
+                // Only a token the user supplied can be "signed out"; the
+                // short-lived CLI token (auto-credentials) just ages out.
+                if explicit_token(state).is_some() {
+                    ProviderSnapshot::signed_out(self.id(), self.name(), note)
+                } else {
+                    ProviderSnapshot::unavailable(self.id(), self.name(), note)
+                }
+            }
             Err(FetchError::RateLimited(retry_after)) => {
                 let secs = retry_after.unwrap_or(60).min(3600);
                 set_rate_limited(Duration::from_secs(secs));
@@ -134,6 +139,7 @@ impl ClaudeProvider {
             local_models: Vec::new(),
             active_sessions: detect_ide_sessions(),
             stale_secs: None,
+            auth_failed: false,
         }
     }
 }
@@ -176,16 +182,21 @@ fn parse_reset(v: &serde_json::Value) -> Option<String> {
 /// (`~/.claude/.credentials.json`) is intentionally NOT read — except in
 /// personal builds compiled with the `auto-credentials` feature, where it is
 /// the last-resort fallback.
-fn load_token(state: &AppState) -> Option<String> {
+/// The token the user configured (Settings or `CLAUDE_CODE_OAUTH_TOKEN`).
+fn explicit_token(state: &AppState) -> Option<String> {
     if let Some(t) = state.claude_token.as_ref() {
         if !t.trim().is_empty() {
             return Some(t.clone());
         }
     }
-    if let Ok(t) = std::env::var("CLAUDE_CODE_OAUTH_TOKEN") {
-        if !t.trim().is_empty() {
-            return Some(t);
-        }
+    std::env::var("CLAUDE_CODE_OAUTH_TOKEN")
+        .ok()
+        .filter(|t| !t.trim().is_empty())
+}
+
+fn load_token(state: &AppState) -> Option<String> {
+    if let Some(t) = explicit_token(state) {
+        return Some(t);
     }
     #[cfg(feature = "auto-credentials")]
     if let Some(t) = load_token_from_claude_code() {

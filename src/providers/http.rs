@@ -9,6 +9,14 @@ use ureq::Agent;
 /// exhaust memory — amplified by the parallel per-provider threads.
 pub const MAX_BODY_BYTES: u64 = 1_048_576;
 
+/// Why a provider fetch produced nothing: the credential was rejected (the user
+/// must sign in again) or anything else (network, 5xx, bad payload…).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Failure {
+    Auth,
+    Other,
+}
+
 /// Global proxy URL applied to every agent. Stored behind a `RwLock` (not a
 /// `OnceLock`) so a runtime change in Settings takes effect on the next refresh
 /// instead of being silently ignored until the next app launch.

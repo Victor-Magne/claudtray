@@ -105,7 +105,8 @@ impl QuotaMonitor {
                 fresh
             } else {
                 match self.last_good.get(id) {
-                    Some((good, ts)) if ts.elapsed() < STALE_TTL => {
+                    // A rejected token is not a blip: never mask it with old numbers.
+                    Some((good, ts)) if !fresh.auth_failed && ts.elapsed() < STALE_TTL => {
                         let mut good = good.clone();
                         good.stale_secs = Some(ts.elapsed().as_secs());
                         good
