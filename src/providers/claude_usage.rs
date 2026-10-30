@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use std::time::{Instant, UNIX_EPOCH};
 
 /// Bump when `Entry`'s meaning changes so a stale on-disk cache is discarded.
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 /// Don't rewrite the on-disk cache more often than this (the active transcript
 /// changes on every refresh).
 const SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(120);
@@ -103,17 +103,44 @@ struct Usage {
     cache_read_input_tokens: u64,
 }
 
-/// Approximate input/output price per million tokens (USD) by model family.
-fn model_prices(model: &str) -> (f64, f64) {
+/// USD per million tokens.
+struct Price {
+    input: f64,
+    output: f64,
+    cache_read: f64,
+}
+
+/// Anthropic's published API prices by model id (checked 2026-10-30). Cache
+/// reads are not a flat share of input across generations (Opus 5.5 reads at
+/// 5%, Sonnet 5.5 at 10%), so each row carries its own. Cache writes use the
+/// standard 1.25× input. Estimate only: the id is matched by substring, and
+/// long-context or fast-mode premiums are ignored.
+fn model_prices(model: &str) -> Price {
     let m = model.to_ascii_lowercase();
-    if m.contains("opus") {
-        (15.0, 75.0)
+    let p = |input, output, cache_read| Price { input, output, cache_read };
+    if m.contains("fable") || m.contains("mythos") {
+        p(10.0, 50.0, 0.25)
+    } else if m.contains("opus-5-5") {
+        p(4.0, 20.0, 0.20)
+    } else if m.contains("opus") {
+        // Opus 4.1 and older were $15 / $75; 4.5 onwards is $5 / $25.
+        if m.contains("opus-4-1") || m.contains("3-opus") || m.contains("opus-4-2025") {
+            p(15.0, 75.0, 1.50)
+        } else {
+            p(5.0, 25.0, 0.50)
+        }
+    } else if m.contains("sonnet-5") {
+        p(2.0, 10.0, 0.20)
     } else if m.contains("sonnet") {
-        (3.0, 15.0)
+        p(3.0, 15.0, 0.30)
+    } else if m.contains("haiku-5") {
+        p(0.10, 0.50, 0.01)
+    } else if m.contains("haiku-4") {
+        p(1.0, 5.0, 0.10)
     } else if m.contains("haiku") {
-        (0.80, 4.0)
+        p(0.80, 4.0, 0.08)
     } else {
-        (3.0, 15.0) // default: sonnet tier
+        p(3.0, 15.0, 0.30) // unknown model: sonnet 4 tier, as before
     }
 }
 
@@ -150,11 +177,11 @@ fn parse_line(line: &str, file_session: &str) -> Option<Entry> {
     if tokens == 0 {
         return None;
     }
-    let (price_in, price_out) = model_prices(&model);
-    let cost = (inp as f64 * price_in
-        + out as f64 * price_out
-        + cache_c as f64 * price_in * 1.25 // cache write: 1.25× input
-        + cache_r as f64 * price_in * 0.10) // cache read: 0.10× input
+    let price = model_prices(&model);
+    let cost = (inp as f64 * price.input
+        + out as f64 * price.output
+        + cache_c as f64 * price.input * 1.25 // cache write: 1.25× input
+        + cache_r as f64 * price.cache_read)
         / 1_000_000.0;
 
     let day = DateTime::parse_from_rfc3339(l.timestamp.as_deref()?)
@@ -428,6 +455,21 @@ mod tests {
         assert_eq!(st.sessions_total, 3);
         // the old message is outside the 30-day month, the others inside
         assert_eq!(st.month.tokens, 8700);
+    }
+
+    #[test]
+    fn prices_follow_the_model_generation() {
+        let rd = |m| model_prices(m).cache_read;
+        assert_eq!(model_prices("claude-opus-5-5").input, 4.0);
+        assert_eq!(rd("claude-opus-5-5"), 0.20);
+        assert_eq!(model_prices("claude-opus-4-8").output, 25.0);
+        assert_eq!(model_prices("claude-opus-4-1-20250805").input, 15.0);
+        assert_eq!(model_prices("claude-sonnet-5").output, 10.0);
+        assert_eq!(model_prices("claude-sonnet-4-6").input, 3.0);
+        assert_eq!(model_prices("claude-haiku-5-5").input, 0.10);
+        assert_eq!(model_prices("claude-haiku-4-5").input, 1.0);
+        assert_eq!(rd("claude-fable-5-1"), 0.25);
+        assert_eq!(model_prices("something-else").input, 3.0);
     }
 
     #[test]

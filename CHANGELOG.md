@@ -25,6 +25,9 @@ Releases before 1.4.0 are only tagged in git and described in their
 ### Fixed
 - Token totals no longer skip transcripts over 10 MB or past the 300 newest
   files.
+- Estimated cost uses current per-model prices (Opus 5.5, Sonnet 5, Haiku 5.5,
+  Fable…) with each model's own cache-read price, instead of one old tier per
+  family. It stays an estimate.
 
 ## [1.4.0] - 2026-08-31
 

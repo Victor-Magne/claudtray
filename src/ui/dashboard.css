@@ -516,6 +516,9 @@ footer .spacer {
 .rc-sub.used {
   color: var(--warning);
 }
+html[data-theme="light"] .rc-sub.used {
+  color: #9a6700; /* darker amber: --warning is too pale on the light tint */
+}
 
 .tok-grid {
   display: grid;
