@@ -307,6 +307,25 @@ header .spacer {
   opacity: 0.5;
 }
 
+.fresh-line {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--fg-faint);
+  padding: 0 2px;
+}
+.fresh-line:empty {
+  display: none;
+}
+.fresh-line.alert {
+  color: var(--warning);
+}
+html[data-theme="light"] .fresh-line.alert {
+  color: #9a6700; /* as .rc-sub.used: --warning is too pale on light */
+}
+.empty .fresh-line {
+  margin-top: 6px;
+}
+
 .stale-banner {
   grid-column: 1 / -1;
   font-size: 11px;

@@ -59,6 +59,9 @@ const STRINGS = {
     updatedPrefix: "Atualizado ",
     staleNote: "Sem resposta do provider —",
     agoSuffix: (n, unit) => `há ${n}${unit}`,
+    retryIn: (d) => `a tentar de novo em ${d}`,
+    retryNow: "a tentar de novo…",
+    signedOut: "sessão terminada — volta a autenticar",
     win5h: "Janela de 5h",
     win7d: "Uso de 7 dias",
     usedSuffix: "usado",
@@ -118,6 +121,9 @@ const STRINGS = {
     updatedPrefix: "Updated ",
     staleNote: "No response from provider —",
     agoSuffix: (n, unit) => `${n}${unit} ago`,
+    retryIn: (d) => `retrying in ${d}`,
+    retryNow: "retrying…",
+    signedOut: "signed out — sign in again",
     win5h: "5h Rate Window",
     win7d: "7-Day Usage",
     usedSuffix: "used",
@@ -212,8 +218,10 @@ function applyLanguagePref(pref) {
 }
 
 // ---- Data entry point (called from Rust) ----
+let dataReceivedAt = Date.now(); // base for counting `retry_in_secs` down between snapshots
 window.updateData = function (snapshot) {
   DATA = snapshot;
+  dataReceivedAt = Date.now();
   if (snapshot.theme) applyTheme(snapshot.theme);
   if (snapshot.language) applyLanguagePref(snapshot.language);
   if (snapshot.resolved_language && snapshot.resolved_language !== currentLang) {
@@ -265,7 +273,8 @@ function renderTabs() {
     el.className = "tab" + (p.id === activeProvider ? " active" : "");
     el.textContent = p.name;
     if (!p.available) el.style.opacity = "0.55";
-    if (p.stale_secs != null) el.title = t("staleNote") + " " + formatAgo(p.stale_secs);
+    el.dataset.pid = p.id;
+    el.title = tabTooltip(p);
     el.onclick = () => {
       activeProvider = p.id;
       render();
@@ -294,9 +303,12 @@ function renderCards() {
     note.textContent = p.note || t("noDataNote");
     div.appendChild(big);
     div.appendChild(note);
+    div.appendChild(freshLine(p));
     wrap.appendChild(div);
     return;
   }
+
+  wrap.appendChild(freshLine(p));
 
   if (p.stale_secs != null) {
     const stale = document.createElement("div");
@@ -708,6 +720,57 @@ function formatAgo(secs) {
   return t("agoSuffix")(Math.floor(secs / 3600), "h");
 }
 
+// "5 min" / "30 s" for the retry countdown (same in both languages).
+function formatSpan(secs) {
+  if (secs < 60) return secs + " s";
+  if (secs < 3600) return Math.ceil(secs / 60) + " min";
+  return Math.ceil(secs / 3600) + " h";
+}
+
+// Per-provider freshness: when the last SUCCESSFUL collect was, plus what is
+// going on when the provider is failing. Derived from the snapshot and the
+// clock, so the 1 s timer re-renders it without any request.
+function freshText(p) {
+  const parts = [];
+  if (p.fetched_at) {
+    const secs = Math.max(0, Math.floor((Date.now() - new Date(p.fetched_at)) / 1000));
+    parts.push(t("updatedPrefix") + formatAgo(secs));
+  }
+  if (p.auth_failed) {
+    parts.push(t("signedOut"));
+  } else if (p.retry_in_secs != null) {
+    const left = p.retry_in_secs - Math.floor((Date.now() - dataReceivedAt) / 1000);
+    parts.push(left > 0 ? t("retryIn")(formatSpan(left)) : t("retryNow"));
+  }
+  return parts.join(" · ");
+}
+
+function tabTooltip(p) {
+  const stale = p.stale_secs != null ? t("staleNote") + " " + formatAgo(p.stale_secs) : "";
+  return [stale, freshText(p)].filter(Boolean).join("\n");
+}
+
+function freshLine(p) {
+  const el = div("fresh-line");
+  el.dataset.pid = p.id;
+  el.classList.toggle("alert", !!(p.auth_failed || p.retry_in_secs != null));
+  el.textContent = freshText(p); // textContent only: nothing here is trusted markup
+  return el;
+}
+
+function renderFresh() {
+  if (!DATA) return;
+  const byId = (id) => DATA.providers.find((x) => x.id === id);
+  document.querySelectorAll(".fresh-line").forEach((el) => {
+    const p = byId(el.dataset.pid);
+    if (p) el.textContent = freshText(p);
+  });
+  document.querySelectorAll("#tabs .tab").forEach((el) => {
+    const p = byId(el.dataset.pid);
+    if (p) el.title = tabTooltip(p);
+  });
+}
+
 function renderUpdated() {
   const el = document.getElementById("updated");
   if (!DATA || !DATA.updated_at) {
@@ -722,6 +785,7 @@ function renderUpdated() {
 // tick the relative labels + reset countdowns every second
 setInterval(() => {
   renderUpdated();
+  renderFresh();
   document.querySelectorAll(".reset:not(.exhaustion)").forEach((el) => {
     el.textContent = resetText(el.dataset.resetAt);
   });

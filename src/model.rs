@@ -165,6 +165,12 @@ pub struct ProviderSnapshot {
     /// UI can say "retrying in…". `None` when the provider is not backing off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_in_secs: Option<u64>,
+    /// RFC3339 (local offset) time of this provider's last SUCCESSFUL
+    /// collection. Set by the monitor when it stores a good result (a provider
+    /// refreshes on its own interval, so fresh data can be minutes old); the UI
+    /// shows "updated Xs ago" from it. `None` until one succeeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<String>,
 }
 
 impl ProviderSnapshot {
@@ -197,6 +203,7 @@ impl ProviderSnapshot {
             stale_secs: None,
             auth_failed: false,
             retry_in_secs: None,
+            fetched_at: None,
         }
     }
 }
