@@ -39,6 +39,10 @@ impl Provider for CodexProvider {
         "codex"
     }
 
+    fn min_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(4) // local files; just under the 5 s tick
+    }
+
     fn name(&self) -> &'static str {
         "Codex"
     }

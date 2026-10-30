@@ -17,6 +17,10 @@ use crate::state::AppState;
 pub trait Provider: Send + Sync {
     fn id(&self) -> &'static str;
     fn name(&self) -> &'static str;
+    /// Shortest gap between two `collect` calls: the monitor ticks every 5 s,
+    /// but quota APIs only change over minutes and rate-limit (429) when hit
+    /// every tick. Local (file/localhost) providers can be polled in seconds.
+    fn min_interval(&self) -> std::time::Duration;
     fn collect(&self, state: &AppState) -> ProviderSnapshot;
 }
 
