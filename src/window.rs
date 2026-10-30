@@ -278,7 +278,7 @@ impl Dashboard {
 
     #[cfg(windows)]
     pub fn hwnd(&self) -> isize {
-        self.window.hwnd() as isize
+        self.window.hwnd()
     }
 
     /// No HWND on this platform; notifications go through D-Bus and ignore it.

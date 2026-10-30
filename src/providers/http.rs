@@ -56,7 +56,9 @@ fn proxy_url() -> Option<String> {
 /// A short-timeout ureq agent. `insecure` disables TLS certificate
 /// verification — required for the Antigravity language server, which serves
 /// over HTTPS on localhost with a self-signed certificate. The global timeout
-/// keeps a hung endpoint from stalling a refresh.
+/// keeps a hung endpoint from stalling a refresh. Redirects are never followed:
+/// every provider endpoint answers directly, and following one would forward
+/// custom secret headers (e.g. the Antigravity CSRF token) to wherever it points.
 pub fn agent(insecure: bool) -> Agent {
     let tls = if insecure {
         TlsConfig::builder().disable_verification(true).build()
@@ -65,6 +67,7 @@ pub fn agent(insecure: bool) -> Agent {
     };
     let mut builder = ureq::config::Config::builder()
         .timeout_global(Some(Duration::from_secs(5)))
+        .max_redirects(0)
         .http_status_as_error(false)
         .tls_config(tls);
     if let Some(proxy) = proxy_url() {
@@ -96,6 +99,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_never_follows_redirects() {
+        assert_eq!(agent(false).config().max_redirects(), 0);
+        assert_eq!(agent(true).config().max_redirects(), 0);
+    }
 
     #[test]
     fn is_valid_proxy_requires_http_scheme_and_a_host() {
