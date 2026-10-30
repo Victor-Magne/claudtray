@@ -8,8 +8,7 @@
 //! behaviour as the Windows tray.
 
 use crate::i18n::{catalog, Lang};
-use crate::model::Status;
-use crate::renderer::generate_dynamic_icon;
+use crate::renderer::{generate_dynamic_icon, IconState};
 use crate::window::UserEvent;
 use ksni::menu::{MenuItem, StandardItem};
 use ksni::TrayMethods;
@@ -48,8 +47,11 @@ impl ksni::Tray for ClaudTray {
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
+        // First line is the title, the per-provider rows go in the description.
+        let (title, description) = self.tooltip.split_once('\n').unwrap_or((&self.tooltip, ""));
         ksni::ToolTip {
-            title: self.tooltip.clone(),
+            title: title.into(),
+            description: description.into(),
             ..Default::default()
         }
     }
@@ -95,28 +97,28 @@ impl ksni::Tray for ClaudTray {
 /// runtime; called from `main` before the event loop starts.
 pub async fn spawn(
     proxy: EventLoopProxy<UserEvent>,
-    status: Status,
+    icon: IconState,
     tooltip: String,
     lang: Lang,
 ) -> Option<ksni::Handle<ClaudTray>> {
     let tray = ClaudTray {
         proxy,
-        icon: to_ksni_icon(generate_dynamic_icon(status)),
+        icon: to_ksni_icon(generate_dynamic_icon(icon)),
         tooltip,
         lang,
     };
     tray.spawn().await.ok()
 }
 
-/// Refresh icon colour + tooltip (and, on a language change, the menu labels
+/// Refresh icon (colour + mark) + tooltip (and, on a language change, the menu labels
 /// picked up on the next open) from the UI thread (fire-and-forget task —
 /// `Handle::update` is async and the event loop closure is not).
-pub fn update(handle: &ksni::Handle<ClaudTray>, status: Status, tooltip: String, lang: Lang) {
+pub fn update(handle: &ksni::Handle<ClaudTray>, icon: IconState, tooltip: String, lang: Lang) {
     let handle = handle.clone();
     tokio::spawn(async move {
         handle
             .update(move |t| {
-                t.icon = to_ksni_icon(generate_dynamic_icon(status));
+                t.icon = to_ksni_icon(generate_dynamic_icon(icon));
                 t.tooltip = tooltip;
                 t.lang = lang;
             })
