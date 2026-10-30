@@ -1,4 +1,4 @@
-use super::http::agent;
+use super::http::{agent, failure_for, Failure};
 use super::Provider;
 use crate::model::ProviderSnapshot;
 use crate::state::AppState;
@@ -43,7 +43,7 @@ impl Provider for GeminiProvider {
         };
 
         match fetch(key) {
-            Some((total, generative)) => ProviderSnapshot {
+            Ok((total, generative)) => ProviderSnapshot {
                 id: self.id().to_string(),
                 name: self.name().to_string(),
                 available: true,
@@ -56,19 +56,23 @@ impl Provider for GeminiProvider {
                 active_sessions: Vec::new(),
                 stale_secs: None,
                 auth_failed: false,
+                retry_in_secs: None,
             },
-            None => ProviderSnapshot::unavailable(
+            // No auth_failed here: Gemini answers a bad key with 400/403, which
+            // is not unambiguous (the "signed out" alert is 401-only).
+            Err(f) => ProviderSnapshot::unavailable(
                 self.id(),
                 self.name(),
                 "Falha na ligação (API key inválida?)",
-            ),
+            )
+            .retry_in(f.retry_after()),
         }
     }
 }
 
 /// One attempt: the monitor's interval / `FAIL_RETRY` spacing handles retries,
 /// so a slow provider never sleeps in the tick path.
-fn fetch(key: &str) -> Option<(usize, usize)> {
+fn fetch(key: &str) -> Result<(usize, usize), Failure> {
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models?key={key}&pageSize=50"
     );
@@ -76,18 +80,18 @@ fn fetch(key: &str) -> Option<(usize, usize)> {
         .get(&url)
         .header("User-Agent", "ClaudTray")
         .call()
-        .ok()?;
+        .map_err(|_| Failure::Other)?;
     if resp.status().as_u16() != 200 {
-        return None;
+        return Err(failure_for(resp.status().as_u16(), resp.headers()));
     }
     let text = resp
         .body_mut()
         .with_config()
         .limit(super::http::MAX_BODY_BYTES)
         .read_to_string()
-        .ok()?;
-    let parsed: ModelsResp = serde_json::from_str(&text).ok()?;
-    Some(count_models(&parsed))
+        .map_err(|_| Failure::Other)?;
+    let parsed: ModelsResp = serde_json::from_str(&text).map_err(|_| Failure::Other)?;
+    Ok(count_models(&parsed))
 }
 
 /// `(total models, models that support `generateContent`)`.

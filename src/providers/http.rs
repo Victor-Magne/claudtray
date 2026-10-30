@@ -14,7 +14,35 @@ pub const MAX_BODY_BYTES: u64 = 1_048_576;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Failure {
     Auth,
+    /// 429/503 with a `Retry-After` of this many seconds.
+    Throttled(u64),
     Other,
+}
+
+impl Failure {
+    /// The server-provided retry delay, if any.
+    pub fn retry_after(&self) -> Option<u64> {
+        match self {
+            Failure::Throttled(s) => Some(*s),
+            _ => None,
+        }
+    }
+}
+
+/// Seconds from a `Retry-After` header. The HTTP-date form is not parsed
+/// (ponytail: the APIs polled here send seconds; the monitor's own backoff
+/// still applies if one ever sends a date).
+pub fn retry_after_secs(headers: &ureq::http::HeaderMap) -> Option<u64> {
+    headers.get("retry-after")?.to_str().ok()?.trim().parse().ok()
+}
+
+/// What a non-200 status means for a provider whose only auth failure is 401.
+pub fn failure_for(status: u16, headers: &ureq::http::HeaderMap) -> Failure {
+    match status {
+        401 => Failure::Auth,
+        429 | 503 => retry_after_secs(headers).map_or(Failure::Other, Failure::Throttled),
+        _ => Failure::Other,
+    }
 }
 
 /// Global proxy URL applied to every agent. Stored behind a `RwLock` (not a
@@ -86,6 +114,19 @@ mod tests {
     fn agent_never_follows_redirects() {
         assert_eq!(agent(false).config().max_redirects(), 0);
         assert_eq!(agent(true).config().max_redirects(), 0);
+    }
+
+    #[test]
+    fn retry_after_is_read_for_429_and_503_only() {
+        let mut h = ureq::http::HeaderMap::new();
+        assert_eq!(failure_for(429, &h), Failure::Other, "no header, no delay");
+        h.insert("retry-after", " 120 ".parse().unwrap());
+        assert_eq!(failure_for(429, &h), Failure::Throttled(120));
+        assert_eq!(failure_for(503, &h), Failure::Throttled(120));
+        assert_eq!(failure_for(500, &h), Failure::Other);
+        assert_eq!(failure_for(401, &h), Failure::Auth);
+        h.insert("retry-after", "Wed, 21 Oct 2026 07:28:00 GMT".parse().unwrap());
+        assert_eq!(failure_for(429, &h), Failure::Other);
     }
 
     #[test]
