@@ -4,7 +4,11 @@ use crate::providers::{self, Provider};
 use crate::state::AppState;
 use chrono::{DateTime, Local};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
+
+type BoxProvider = Arc<dyn Provider + Send + Sync>;
 
 /// How long a provider's last successful snapshot is reused after a failure,
 /// so fast polling doesn't flicker to "unavailable" on a transient blip.
@@ -20,13 +24,45 @@ const SAVE_INTERVAL: Duration = Duration::from_secs(30);
 /// for that long. Still far gentler than the 5 s tick.
 const FAIL_RETRY: Duration = Duration::from_secs(30);
 
+/// How long one tick waits for a provider. Past it the provider is treated as
+/// failed for this tick (its last good value stays, marked stale) and the UI
+/// is not held up any longer. Above the 5 s HTTP timeout of a single attempt.
+const PROVIDER_DEADLINE: Duration = Duration::from_secs(8);
+
+/// Marks a provider's `collect` as running; cleared on drop (also on panic).
+struct RunGuard(Arc<AtomicBool>);
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Decides which providers to collect on a tick and what to show for the rest.
-#[derive(Default)]
 struct Collector {
     /// Last raw collection result per provider id, with when it was attempted.
     last_try: HashMap<String, (ProviderSnapshot, Instant)>,
     /// Last successful snapshot per provider id, with the time it was taken.
     last_good: HashMap<String, (ProviderSnapshot, Instant)>,
+    /// Providers whose `collect` is still running, possibly past its deadline.
+    /// A new one is never started meanwhile, so a hung provider cannot pile up
+    /// threads.
+    running: HashMap<String, Arc<AtomicBool>>,
+    /// Shown for a provider that has no result yet (last run's snapshot at startup).
+    seed: HashMap<String, ProviderSnapshot>,
+    deadline: Duration,
+}
+
+impl Default for Collector {
+    fn default() -> Self {
+        Self {
+            last_try: HashMap::new(),
+            last_good: HashMap::new(),
+            running: HashMap::new(),
+            seed: HashMap::new(),
+            deadline: PROVIDER_DEADLINE,
+        }
+    }
 }
 
 impl Collector {
@@ -42,79 +78,118 @@ impl Collector {
         }
     }
 
-    /// One tick: collect the due (or all, if `force`) enabled providers in
-    /// parallel, reuse the cached result for the rest, and return the display
-    /// list in provider order. `now` is injected so tests control the clock.
+    /// What to display for `id` given its latest raw result `fresh`. A provider
+    /// that failed keeps showing its last good value for STALE_TTL so fast
+    /// polling doesn't flicker.
+    fn resolve(&self, id: &str, fresh: ProviderSnapshot, now: Instant) -> ProviderSnapshot {
+        if fresh.available {
+            return fresh;
+        }
+        match self.last_good.get(id) {
+            // A rejected token is not a blip: never mask it with old numbers.
+            Some((good, ts))
+                if !fresh.auth_failed && now.saturating_duration_since(*ts) < STALE_TTL =>
+            {
+                let mut good = good.clone();
+                good.stale_secs = Some(now.saturating_duration_since(*ts).as_secs());
+                good
+            }
+            _ => fresh,
+        }
+    }
+
+    /// Display value from the cache alone (no collection in flight for it).
+    fn cached(&self, p: &BoxProvider, now: Instant) -> ProviderSnapshot {
+        let id = p.id();
+        let fresh = match self.last_try.get(id) {
+            Some((snap, _)) => snap.clone(),
+            None => self.seed.get(id).cloned().unwrap_or_else(|| {
+                ProviderSnapshot::unavailable(id, p.name(), "A carregar…")
+            }),
+        };
+        self.resolve(id, fresh, now)
+    }
+
+    /// Record a collection result and return what to display for it.
+    fn settle(&mut self, id: &str, fresh: ProviderSnapshot, now: Instant) -> ProviderSnapshot {
+        self.last_try.insert(id.to_string(), (fresh.clone(), now));
+        if fresh.available {
+            self.last_good.insert(id.to_string(), (fresh.clone(), now));
+        }
+        self.resolve(id, fresh, now)
+    }
+
+    /// One tick: start the due (or all, if `force`) enabled providers in
+    /// parallel and call `on_update(display list, done)` each time a provider
+    /// finishes (the others keep their cached value), the last call with
+    /// `done`; if nothing is due, once from the cache. Providers still running
+    /// after `deadline` count as failed. The list is in provider order. `now`
+    /// is injected so tests control the cache clock.
     fn round(
         &mut self,
-        all: &[Box<dyn Provider + Send + Sync>],
-        state: &AppState,
+        all: &[BoxProvider],
+        state: &Arc<AppState>,
         force: bool,
         now: Instant,
-    ) -> Vec<ProviderSnapshot> {
+        on_update: &mut dyn FnMut(&[ProviderSnapshot], bool),
+    ) {
         // Hidden providers are skipped entirely: no collection thread (no API
         // calls) and no entry in the snapshot, so they don't affect the tray
         // icon or alerts. The full catalog still goes out for the settings UI.
-        let enabled: Vec<_> = all
+        let enabled: Vec<&BoxProvider> = all
             .iter()
             .filter(|p| !state.disabled_providers.iter().any(|d| d == p.id()))
             .collect();
-        let due: Vec<bool> = enabled
-            .iter()
-            .map(|p| force || self.is_due(p.id(), p.min_interval(), now))
-            .collect();
+        let mut shown: Vec<ProviderSnapshot> =
+            enabled.iter().map(|p| self.cached(p, now)).collect();
 
-        // Scoped threads borrow the shared `&AppState` instead of each cloning
-        // it, so the credential fields are not duplicated across N threads.
-        let mut raw: HashMap<String, ProviderSnapshot> = std::thread::scope(|scope| {
-            let handles: Vec<_> = enabled
-                .iter()
-                .zip(&due)
-                .filter(|(_, due)| **due)
-                .map(|(provider, _)| {
-                    scope.spawn(move || (provider.id().to_string(), provider.collect(state)))
-                })
-                .collect();
-            handles.into_iter().filter_map(|h| h.join().ok()).collect()
-        });
+        let (tx, rx) = mpsc::channel();
+        let mut waiting = vec![false; enabled.len()];
+        for (i, p) in enabled.iter().enumerate() {
+            let due = force || self.is_due(p.id(), p.min_interval(), now);
+            let busy = self.running.entry(p.id().to_string()).or_default();
+            if !due || busy.swap(true, Ordering::SeqCst) {
+                continue;
+            }
+            let (p, state, tx) = (Arc::clone(p), Arc::clone(state), tx.clone());
+            let guard = RunGuard(Arc::clone(busy));
+            std::thread::spawn(move || {
+                let snap = p.collect(&state);
+                drop(guard); // free before the result is visible, so the next tick can reuse it
+                let _ = tx.send((i, snap));
+            });
+            waiting[i] = true;
+        }
+        drop(tx); // only the collector threads hold senders now
 
-        let mut snaps = Vec::with_capacity(enabled.len());
-        // A provider that just failed keeps showing its last good value for
-        // STALE_TTL so fast polling doesn't flicker.
-        for (provider, due) in enabled.iter().zip(due) {
-            let id = provider.id();
-            let unavailable =
-                || ProviderSnapshot::unavailable(id, provider.name(), "Erro na recolha");
-            let fresh = match raw.remove(id) {
-                Some(snap) => snap,
-                None if due => unavailable(), // collector thread panicked
-                None => self.last_try.get(id).map_or_else(unavailable, |(s, _)| s.clone()),
-            };
-            if due {
-                self.last_try.insert(id.to_string(), (fresh.clone(), now));
-                if fresh.available {
-                    self.last_good.insert(id.to_string(), (fresh.clone(), now));
+        let mut left = waiting.iter().filter(|w| **w).count();
+        if left == 0 {
+            on_update(&shown, true);
+            return;
+        }
+        let end = Instant::now() + self.deadline;
+        while left > 0 {
+            match rx.recv_timeout(end.saturating_duration_since(Instant::now())) {
+                Ok((i, snap)) => {
+                    shown[i] = self.settle(enabled[i].id(), snap, now);
+                    waiting[i] = false;
+                    left -= 1;
+                }
+                // Deadline passed, or the remaining threads panicked (all senders gone).
+                Err(e) => {
+                    let why = match e {
+                        mpsc::RecvTimeoutError::Timeout => "Tempo excedido",
+                        mpsc::RecvTimeoutError::Disconnected => "Erro na recolha",
+                    };
+                    for (i, p) in enabled.iter().enumerate().filter(|(i, _)| waiting[*i]) {
+                        let failed = ProviderSnapshot::unavailable(p.id(), p.name(), why);
+                        shown[i] = self.settle(p.id(), failed, now);
+                    }
+                    left = 0;
                 }
             }
-            let snap = if fresh.available {
-                fresh
-            } else {
-                match self.last_good.get(id) {
-                    // A rejected token is not a blip: never mask it with old numbers.
-                    Some((good, ts))
-                        if !fresh.auth_failed
-                            && now.saturating_duration_since(*ts) < STALE_TTL =>
-                    {
-                        let mut good = good.clone();
-                        good.stale_secs = Some(now.saturating_duration_since(*ts).as_secs());
-                        good
-                    }
-                    _ => fresh,
-                }
-            };
-            snaps.push(snap);
+            on_update(&shown, left == 0);
         }
-        snaps
     }
 }
 
@@ -135,10 +210,15 @@ impl QuotaMonitor {
         let state = AppState::load();
         // Apply proxy once at startup so all ureq agents pick it up.
         providers::http::set_proxy(state.http_proxy.clone());
+        // Until a provider answers, show what the last run saw instead of a blank.
+        let mut collector = Collector::default();
+        if let Some(last) = &state.last_snapshot {
+            collector.seed = last.providers.iter().map(|p| (p.id.clone(), p.clone())).collect();
+        }
         Self {
             state,
             last: None,
-            collector: Collector::default(),
+            collector,
             last_history_sample: None,
             last_save: None,
         }
@@ -158,23 +238,48 @@ impl QuotaMonitor {
 
     /// Periodic refresh (the ticker): only providers whose `min_interval` has
     /// elapsed are collected; the others reuse their last snapshot as-is.
-    pub fn refresh(&mut self) -> Snapshot {
-        self.refresh_with(false)
+    /// `emit` gets an updated snapshot each time a provider finishes; the last
+    /// one is the complete round.
+    pub fn refresh(&mut self, emit: impl FnMut(Snapshot)) {
+        self.refresh_with(false, emit)
     }
 
     /// Refresh every provider now, ignoring `min_interval`. For explicit user
     /// actions (manual refresh, new credential).
-    pub fn refresh_now(&mut self) -> Snapshot {
-        self.refresh_with(true)
+    pub fn refresh_now(&mut self, emit: impl FnMut(Snapshot)) {
+        self.refresh_with(true, emit)
     }
 
-    /// Collect from the due providers in parallel, ride out transient failures,
-    /// cache the snapshot, and return it.
-    fn refresh_with(&mut self, force: bool) -> Snapshot {
+    /// Collect from the due providers in parallel and `emit` a snapshot as each
+    /// one lands, so a slow provider never holds back the others.
+    fn refresh_with(&mut self, force: bool, mut emit: impl FnMut(Snapshot)) {
         let all = providers::all();
-        let mut snaps = self.collector.round(&all, &self.state, force, Instant::now());
-        let disabled = self.state.disabled_providers.clone();
+        let catalog: Vec<ProviderInfo> = all
+            .iter()
+            .map(|p| ProviderInfo {
+                id: p.id().to_string(),
+                name: p.name().to_string(),
+                enabled: !self.state.disabled_providers.iter().any(|d| d == p.id()),
+            })
+            .collect();
+        // The collector is taken out so the callback can borrow the rest of `self`.
+        let mut collector = std::mem::take(&mut self.collector);
+        let state = Arc::new(self.state.clone());
+        collector.round(&all, &state, force, Instant::now(), &mut |snaps, done| {
+            emit(self.assemble(snaps.to_vec(), catalog.clone(), done));
+        });
+        self.collector = collector;
+    }
 
+    /// Turn the display list into the dashboard [`Snapshot`]: pace and exhaustion
+    /// projection per window, history sample (once per round, when it is `done`)
+    /// and sparklines. Also caches it as `last` / `state.last_snapshot`.
+    fn assemble(
+        &mut self,
+        mut snaps: Vec<ProviderSnapshot>,
+        catalog: Vec<ProviderInfo>,
+        done: bool,
+    ) -> Snapshot {
         // Project each window's exhaustion time from its recent decline
         // (using history recorded so far, i.e. not counting this tick's
         // sample yet — that's added below).
@@ -197,10 +302,11 @@ impl QuotaMonitor {
         }
 
         // Record a history point every 5 minutes.
-        let record = match self.last_history_sample {
-            None => true,
-            Some(t) => t.elapsed() >= Duration::from_secs(300),
-        };
+        let record = done
+            && match self.last_history_sample {
+                None => true,
+                Some(t) => t.elapsed() >= Duration::from_secs(300),
+            };
         if record {
             let mut values = HashMap::new();
             for p in &snaps {
@@ -229,15 +335,6 @@ impl QuotaMonitor {
                 history_map.entry(key.clone()).or_default().push(pct);
             }
         }
-
-        let catalog = all
-            .iter()
-            .map(|p| ProviderInfo {
-                id: p.id().to_string(),
-                name: p.name().to_string(),
-                enabled: !disabled.iter().any(|d| d == p.id()),
-            })
-            .collect();
 
         let snapshot = Snapshot {
             updated_at: Local::now().to_rfc3339(),
@@ -517,7 +614,7 @@ mod ttl_tests {
     }
 
     type Rig = (
-        Vec<Box<dyn Provider + Send + Sync>>,
+        Vec<BoxProvider>,
         Arc<AtomicUsize>,
         Arc<Mutex<Mode>>,
     );
@@ -531,7 +628,151 @@ mod ttl_tests {
             calls: calls.clone(),
             mode: mode.clone(),
         };
-        (vec![Box::new(p)], calls, mode)
+        (vec![Arc::new(p)], calls, mode)
+    }
+
+    /// One round, returning the final display list (the callback's last call).
+    fn run(
+        c: &mut Collector,
+        all: &[BoxProvider],
+        state: &Arc<AppState>,
+        force: bool,
+        now: Instant,
+    ) -> Vec<ProviderSnapshot> {
+        let mut last = Vec::new();
+        c.round(all, state, force, now, &mut |snaps, _| last = snaps.to_vec());
+        last
+    }
+
+    /// Fake provider that takes a configurable time to answer.
+    struct Timed {
+        id: &'static str,
+        delay: Arc<Mutex<Duration>>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    impl Provider for Timed {
+        fn id(&self) -> &'static str {
+            self.id
+        }
+        fn name(&self) -> &'static str {
+            self.id
+        }
+        fn min_interval(&self) -> Duration {
+            Duration::from_secs(60)
+        }
+        fn collect(&self, _: &AppState) -> ProviderSnapshot {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            std::thread::sleep(*self.delay.lock().unwrap());
+            let mut s = ProviderSnapshot::unavailable(self.id, self.id, "");
+            s.available = true;
+            s
+        }
+    }
+
+    fn timed(id: &'static str, ms: u64) -> (BoxProvider, Arc<Mutex<Duration>>, Arc<AtomicUsize>) {
+        let delay = Arc::new(Mutex::new(Duration::from_millis(ms)));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let p = Timed { id, delay: delay.clone(), calls: calls.clone() };
+        (Arc::new(p), delay, calls)
+    }
+
+    fn ids(snaps: &[ProviderSnapshot]) -> Vec<&str> {
+        snaps.iter().map(|s| s.id.as_str()).collect()
+    }
+
+    #[test]
+    fn slow_provider_does_not_delay_the_others() {
+        // "slow" stands in for the provider that blocks for seconds.
+        let (slow, ..) = timed("slow", 600);
+        let (fast, ..) = timed("fast", 0);
+        let all = vec![slow, fast];
+        let (state, mut c) = (Arc::new(AppState::default()), Collector::default());
+        let start = std::time::Instant::now();
+        let mut updates: Vec<(Duration, Vec<ProviderSnapshot>, bool)> = Vec::new();
+        c.round(&all, &state, false, Instant::now(), &mut |snaps, done| {
+            updates.push((start.elapsed(), snaps.to_vec(), done));
+        });
+
+        assert_eq!(updates.len(), 2, "one update per provider");
+        // The fast provider is painted long before the slow one answers, and
+        // the partial list keeps the display order with the slow one pending.
+        let (at, partial, done) = &updates[0];
+        assert!(*at < Duration::from_millis(300), "partial arrived after {at:?}");
+        assert!(!done);
+        assert_eq!(ids(partial), ["slow", "fast"]);
+        assert!(!partial[0].available && partial[1].available);
+        // The round only completes once the slow one lands, with both filled in.
+        let (at, full, done) = &updates[1];
+        assert!(*at >= Duration::from_millis(600) && *done);
+        assert_eq!(ids(full), ["slow", "fast"]);
+        assert!(full.iter().all(|s| s.available));
+    }
+
+    #[test]
+    fn partial_snapshot_shows_the_cached_value_of_providers_still_running() {
+        let (slow, delay, _) = timed("slow", 0);
+        let (fast, ..) = timed("fast", 0);
+        let all = vec![slow, fast];
+        let (state, mut c, base) = (Arc::new(AppState::default()), Collector::default(), Instant::now());
+        run(&mut c, &all, &state, false, base);
+        *delay.lock().unwrap() = Duration::from_millis(300);
+        let mut first = None;
+        c.round(&all, &state, true, at(base, 10), &mut |snaps, _| {
+            first.get_or_insert_with(|| snaps.to_vec());
+        });
+        let first = first.unwrap();
+        // "fast" finishes first; "slow" still shows last round's value, in its slot.
+        assert_eq!(ids(&first), ["slow", "fast"]);
+        assert!(first[0].available && first[1].available);
+    }
+
+    #[test]
+    fn deadline_keeps_the_previous_snapshot_marked_stale() {
+        let (slow, delay, calls) = timed("slow", 0);
+        let all = vec![slow];
+        let (state, mut c, base) = (Arc::new(AppState::default()), Collector::default(), Instant::now());
+        c.deadline = Duration::from_millis(100);
+        run(&mut c, &all, &state, false, base);
+
+        *delay.lock().unwrap() = Duration::from_millis(600);
+        let start = std::time::Instant::now();
+        let snaps = run(&mut c, &all, &state, true, at(base, 10));
+        assert!(start.elapsed() < Duration::from_millis(400), "round waited past the deadline");
+        assert!(snaps[0].available, "previous snapshot is kept");
+        assert_eq!(snaps[0].stale_secs, Some(10));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        // The late thread is still running: not started a second time.
+        run(&mut c, &all, &state, true, at(base, 11));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        // Once it has finished the provider is collected again.
+        std::thread::sleep(Duration::from_millis(600));
+        run(&mut c, &all, &state, true, at(base, 12));
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn deadline_without_a_previous_value_is_a_failure_not_a_hang() {
+        let (slow, ..) = timed("slow", 600);
+        let all = vec![slow];
+        let (state, mut c) = (Arc::new(AppState::default()), Collector::default());
+        c.deadline = Duration::from_millis(100);
+        let snaps = run(&mut c, &all, &state, false, Instant::now());
+        assert!(!snaps[0].available && snaps[0].stale_secs.is_none());
+    }
+
+    #[test]
+    fn nothing_due_still_emits_one_complete_update() {
+        let (all, calls, _) = fake(60);
+        let (state, mut c, base) = (Arc::new(AppState::default()), Collector::default(), Instant::now());
+        run(&mut c, &all, &state, false, base);
+        let mut updates = Vec::new();
+        c.round(&all, &state, false, at(base, 5), &mut |snaps, done| {
+            updates.push((snaps.len(), done));
+        });
+        assert_eq!(updates, [(1, true)]);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     fn at(base: Instant, secs: u64) -> Instant {
@@ -541,9 +782,9 @@ mod ttl_tests {
     #[test]
     fn five_minutes_of_5s_ticks_collect_a_60s_provider_at_most_5_times() {
         let (all, calls, _) = fake(60);
-        let (state, mut c, base) = (AppState::default(), Collector::default(), Instant::now());
+        let (state, mut c, base) = (Arc::new(AppState::default()), Collector::default(), Instant::now());
         for tick in 0..60 {
-            let snaps = c.round(&all, &state, false, at(base, tick * 5));
+            let snaps = run(&mut c, &all, &state, false, at(base, tick * 5));
             // Reusing the last good snapshot must not look stale.
             assert!(snaps[0].available && snaps[0].stale_secs.is_none());
         }
@@ -553,9 +794,9 @@ mod ttl_tests {
     #[test]
     fn local_provider_is_collected_on_every_5s_tick() {
         let (all, calls, _) = fake(4);
-        let (state, mut c, base) = (AppState::default(), Collector::default(), Instant::now());
+        let (state, mut c, base) = (Arc::new(AppState::default()), Collector::default(), Instant::now());
         for tick in 0..60 {
-            c.round(&all, &state, false, at(base, tick * 5));
+            run(&mut c, &all, &state, false, at(base, tick * 5));
         }
         assert_eq!(calls.load(Ordering::SeqCst), 60);
     }
@@ -563,44 +804,44 @@ mod ttl_tests {
     #[test]
     fn force_ignores_the_interval() {
         let (all, calls, _) = fake(600);
-        let (state, mut c, base) = (AppState::default(), Collector::default(), Instant::now());
-        c.round(&all, &state, false, base);
-        c.round(&all, &state, false, at(base, 5));
-        c.round(&all, &state, true, at(base, 10));
+        let (state, mut c, base) = (Arc::new(AppState::default()), Collector::default(), Instant::now());
+        run(&mut c, &all, &state, false, base);
+        run(&mut c, &all, &state, false, at(base, 5));
+        run(&mut c, &all, &state, true, at(base, 10));
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]
     fn failure_serves_stale_and_retries_every_30s_not_every_tick() {
         let (all, calls, mode) = fake(60);
-        let (state, mut c, base) = (AppState::default(), Collector::default(), Instant::now());
-        c.round(&all, &state, false, base);
+        let (state, mut c, base) = (Arc::new(AppState::default()), Collector::default(), Instant::now());
+        run(&mut c, &all, &state, false, base);
         *mode.lock().unwrap() = Mode::Fail;
         // t=0 ok; t=60 fails; t=65..85 reuse the cached failure (no new call).
         for tick in 12..18 {
-            let snaps = c.round(&all, &state, false, at(base, tick * 5));
+            let snaps = run(&mut c, &all, &state, false, at(base, tick * 5));
             assert!(snaps[0].available, "last good is shown after a failure");
             assert_eq!(snaps[0].stale_secs, Some(tick * 5));
         }
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         // 30 s after the failure (not the 60 s interval) it is retried.
-        c.round(&all, &state, false, at(base, 90));
+        run(&mut c, &all, &state, false, at(base, 90));
         assert_eq!(calls.load(Ordering::SeqCst), 3);
         // The stale cache still expires after STALE_TTL.
-        let snaps = c.round(&all, &state, false, at(base, 301));
+        let snaps = run(&mut c, &all, &state, false, at(base, 301));
         assert!(!snaps[0].available);
     }
 
     #[test]
     fn auth_failure_is_never_masked_by_the_cache() {
         let (all, _, mode) = fake(60);
-        let (state, mut c, base) = (AppState::default(), Collector::default(), Instant::now());
-        c.round(&all, &state, false, base);
+        let (state, mut c, base) = (Arc::new(AppState::default()), Collector::default(), Instant::now());
+        run(&mut c, &all, &state, false, base);
         *mode.lock().unwrap() = Mode::Auth;
-        let snaps = c.round(&all, &state, false, at(base, 60));
+        let snaps = run(&mut c, &all, &state, false, at(base, 60));
         assert!(!snaps[0].available && snaps[0].auth_failed);
         // Still flagged on the ticks that reuse the cached 401.
-        let snaps = c.round(&all, &state, false, at(base, 65));
+        let snaps = run(&mut c, &all, &state, false, at(base, 65));
         assert!(!snaps[0].available && snaps[0].auth_failed);
     }
 }

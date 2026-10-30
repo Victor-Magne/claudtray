@@ -94,35 +94,29 @@ impl OpenRouterProvider {
     }
 }
 
+/// One attempt: the monitor's interval / `FAIL_RETRY` spacing handles retries,
+/// so a slow provider never sleeps in the tick path.
 fn fetch(key: &str) -> Result<KeyData, Failure> {
-    let key = key.to_string();
-    let rejected = std::cell::Cell::new(false);
-    let data = super::http::with_retry(3, 1, || {
-        let mut resp = agent(false)
-            .get("https://openrouter.ai/api/v1/auth/key")
-            .header("Authorization", format!("Bearer {key}"))
-            .header("User-Agent", "ClaudTray")
-            .call()
-            .ok()?;
-        match resp.status().as_u16() {
-            200 => {}
-            // 401 = bad key; 402 only means out of credits.
-            401 => {
-                rejected.set(true);
-                return None;
-            }
-            _ => return None,
-        }
-        let text = resp
-            .body_mut()
-            .with_config()
-            .limit(super::http::MAX_BODY_BYTES)
-            .read_to_string()
-            .ok()?;
-        let parsed: KeyResp = serde_json::from_str(&text).ok()?;
-        parsed.data
-    });
-    data.ok_or(if rejected.get() { Failure::Auth } else { Failure::Other })
+    let mut resp = agent(false)
+        .get("https://openrouter.ai/api/v1/auth/key")
+        .header("Authorization", format!("Bearer {key}"))
+        .header("User-Agent", "ClaudTray")
+        .call()
+        .map_err(|_| Failure::Other)?;
+    match resp.status().as_u16() {
+        200 => {}
+        // 401 = bad key; 402 only means out of credits.
+        401 => return Err(Failure::Auth),
+        _ => return Err(Failure::Other),
+    }
+    let text = resp
+        .body_mut()
+        .with_config()
+        .limit(super::http::MAX_BODY_BYTES)
+        .read_to_string()
+        .map_err(|_| Failure::Other)?;
+    let parsed: KeyResp = serde_json::from_str(&text).map_err(|_| Failure::Other)?;
+    parsed.data.ok_or(Failure::Other)
 }
 
 #[cfg(test)]

@@ -78,24 +78,6 @@ pub fn agent(insecure: bool) -> Agent {
     builder.build().new_agent()
 }
 
-/// Retry a fallible operation up to `attempts` times with linear backoff.
-/// Backoff starts at `delay_secs` and increases by `delay_secs` per retry.
-/// Returns the first `Some` result, or `None` if all attempts fail.
-pub fn with_retry<T, F>(attempts: u8, delay_secs: u64, mut f: F) -> Option<T>
-where
-    F: FnMut() -> Option<T>,
-{
-    for i in 0..attempts {
-        if i > 0 {
-            std::thread::sleep(Duration::from_secs(delay_secs * i as u64));
-        }
-        if let Some(v) = f() {
-            return Some(v);
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
