@@ -852,6 +852,52 @@ window.addEventListener("blur", function () {
   sendIpc({ type: "blur" });
 });
 
+// Close when the pointer leaves the popover. A layer-shell surface keeps (or
+// never gets) keyboard focus while the pointer wanders off, so neither blur nor
+// Focused(false) fires. The 400 ms hysteresis is cancelled by re-entering; it
+// is not armed while a button is held (press/drag) or the Settings overlay is
+// open, and is re-checked when the timer fires. Rust only ever sees the final
+// decision, as `pointerLeave`.
+const LEAVE_DELAY_MS = 400;
+let pointerInside = false; // never closes a popover the pointer never entered
+let pointerPressed = false;
+let leaveTimer = null;
+
+function armPointerLeave() {
+  clearTimeout(leaveTimer);
+  leaveTimer = null;
+  if (pointerInside || pointerPressed) return;
+  leaveTimer = setTimeout(() => {
+    leaveTimer = null;
+    if (!pointerInside && !pointerPressed && !settings.classList.contains("open")) {
+      sendIpc({ type: "pointerLeave" });
+    }
+  }, LEAVE_DELAY_MS);
+}
+
+window.__setPointerInside = function (inside) {
+  pointerInside = inside;
+  armPointerLeave(); // entering clears any pending close
+};
+// WebView2: the DOM reports the pointer entering/leaving the document
+// (mouseout with a null relatedTarget). On Linux WebKitGTK never reports the
+// leave on a layer-shell surface, so Rust calls __setPointerInside from the
+// GTK crossing events instead (see watch_pointer in window.rs).
+document.addEventListener("mouseover", () => window.__setPointerInside(true));
+document.addEventListener("mouseout", (e) => {
+  if (!e.relatedTarget) window.__setPointerInside(false);
+});
+window.addEventListener("mousedown", () => {
+  pointerPressed = true;
+  armPointerLeave();
+});
+// Releasing outside the window after a drag: the leave was swallowed by the
+// press, so (re)arm now.
+window.addEventListener("mouseup", () => {
+  pointerPressed = false;
+  armPointerLeave();
+});
+
 // Close on Escape key press
 window.addEventListener("keydown", function (e) {
   if (e.key === "Escape") {

@@ -269,6 +269,10 @@ async fn main() {
                 }
                 last_action = Instant::now();
             }
+            #[cfg(target_os = "linux")]
+            Event::UserEvent(UserEvent::PointerInside(inside)) => {
+                dashboard.set_pointer_inside(inside);
+            }
             Event::UserEvent(UserEvent::MenuRefresh) => spawn_refresh(&monitor, &proxy, true),
             Event::UserEvent(UserEvent::MenuExit) => {
                 #[cfg(windows)]
@@ -351,6 +355,15 @@ async fn main() {
                 IpcMessage::Close => {
                     dashboard.hide();
                     last_action = Instant::now();
+                }
+                IpcMessage::PointerLeave => {
+                    // JS already waited out the hysteresis (and skipped it for
+                    // Settings/drags), so no `last_action` grace here: it would
+                    // swallow a legitimate leave and nothing re-sends it.
+                    if dashboard.is_visible() {
+                        dashboard.hide();
+                        last_action = Instant::now();
+                    }
                 }
                 IpcMessage::Blur => {
                     // Click-away: the webview lost focus to another window. We

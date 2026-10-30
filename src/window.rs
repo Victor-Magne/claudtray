@@ -33,6 +33,10 @@ pub enum UserEvent {
     MenuRefresh,
     /// "Sair" tray-menu item.
     MenuExit,
+    /// Linux: the pointer entered (`true`) or left (`false`) the popover, as
+    /// seen by GTK. Relayed to the dashboard JS, which owns the close timing.
+    #[cfg(target_os = "linux")]
+    PointerInside(bool),
 }
 
 /// Actions the dashboard can request from Rust (mirrors `dashboard.js`).
@@ -47,6 +51,8 @@ pub enum IpcMessage {
     Close,
     /// The webview lost focus to another window (click-away).
     Blur,
+    /// The pointer left the popover and stayed out (JS applies the hysteresis).
+    PointerLeave,
     /// OS theme changed while preference is "system" — re-apply Mica tint.
     SyncMica(bool),
     SetOpenRouterKey(String),
@@ -117,6 +123,7 @@ fn parse_ipc(body: &str) -> Option<IpcMessage> {
         "refresh" => Some(IpcMessage::Refresh),
         "close" => Some(IpcMessage::Close),
         "blur" => Some(IpcMessage::Blur),
+        "pointerLeave" => Some(IpcMessage::PointerLeave),
         "setTheme" => {
             let theme = v.get("theme")?.as_str()?.to_string();
             Some(IpcMessage::SetTheme(theme))
@@ -229,6 +236,8 @@ impl Dashboard {
             .map(|d| d.join("ClaudTray").join("WebView2"));
         let mut context = WebContext::new(webview_data_dir);
 
+        #[cfg(target_os = "linux")]
+        let pointer_proxy = proxy.clone();
         let builder = WebViewBuilder::new_with_web_context(&mut context)
             .with_transparent(true)
             .with_html(build_html())
@@ -245,6 +254,8 @@ impl Dashboard {
         let webview = builder
             .build_gtk(window.default_vbox().expect("janela gtk sem vbox"))
             .expect("falha ao criar o webview");
+        #[cfg(target_os = "linux")]
+        watch_pointer(&webview, pointer_proxy);
 
         Self {
             webview,
@@ -270,6 +281,15 @@ impl Dashboard {
                 .webview
                 .evaluate_script(&format!("window.updateData({});", json));
         }
+    }
+
+    /// Feed a native pointer enter/leave into the dashboard's close-on-leave
+    /// state machine (see `setPointerInside` in `dashboard.js`).
+    #[cfg(target_os = "linux")]
+    pub fn set_pointer_inside(&self, inside: bool) {
+        let _ = self
+            .webview
+            .evaluate_script(&format!("window.__setPointerInside({inside});"));
     }
 
     pub fn is_visible(&self) -> bool {
@@ -381,11 +401,51 @@ fn init_layer_shell(window: &Window) -> bool {
     true
 }
 
+/// Linux: forward the pointer crossing the popover edge to the dashboard JS.
+/// WebKitGTK on a layer-shell surface never dispatches `mouseout`/`mouseleave`
+/// to the page when the pointer leaves it, so the GTK crossing events are the
+/// only reliable signal (WebView2 delivers the DOM events itself).
+#[cfg(target_os = "linux")]
+fn watch_pointer(webview: &WebView, proxy: EventLoopProxy<UserEvent>) {
+    use gtk::gdk::{EventMask, NotifyType};
+    use gtk::prelude::*;
+    use wry::WebViewExtUnix;
+
+    let wk = webview.webview();
+    wk.add_events(EventMask::ENTER_NOTIFY_MASK | EventMask::LEAVE_NOTIFY_MASK);
+    let enter = proxy.clone();
+    wk.connect_enter_notify_event(move |_, _| {
+        let _ = enter.send_event(UserEvent::PointerInside(true));
+        gtk::glib::Propagation::Proceed
+    });
+    wk.connect_leave_notify_event(move |_, ev| {
+        // `Inferior`: the pointer only moved onto a child widget/window.
+        if ev.detail() != NotifyType::Inferior {
+            let _ = proxy.send_event(UserEvent::PointerInside(false));
+        }
+        gtk::glib::Propagation::Proceed
+    });
+}
+
 impl Drop for Dashboard {
     fn drop(&mut self) {
         // The window (and its HWND) is about to be destroyed; signal any pending
         // tray-notification cleanup threads to stand down (see notification.rs).
         self.alive
             .store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ipc_pointer_leave() {
+        assert!(matches!(
+            parse_ipc(r#"{"type":"pointerLeave"}"#),
+            Some(IpcMessage::PointerLeave)
+        ));
+        assert!(parse_ipc(r#"{"type":"pointerleave"}"#).is_none());
     }
 }
