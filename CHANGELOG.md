@@ -7,6 +7,12 @@ All notable changes to ClaudTray are documented here. The format is based on
 Releases before 1.4.0 are only tagged in git and described in their
 [GitHub release notes](https://github.com/Victor-Magne/claudtray/releases).
 
+## [Unreleased]
+
+### Security
+- Provider HTTP requests no longer follow redirects, so a custom secret header
+  (e.g. the Antigravity CSRF token) can never be forwarded to another address.
+
 ## [1.4.0] - 2026-08-31
 
 ### Added
