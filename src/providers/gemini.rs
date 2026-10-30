@@ -66,29 +66,28 @@ impl Provider for GeminiProvider {
     }
 }
 
+/// One attempt: the monitor's interval / `FAIL_RETRY` spacing handles retries,
+/// so a slow provider never sleeps in the tick path.
 fn fetch(key: &str) -> Option<(usize, usize)> {
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models?key={key}&pageSize=50"
     );
-    let url_clone = url.clone();
-    super::http::with_retry(3, 1, || {
-        let mut resp = agent(false)
-            .get(&url_clone)
-            .header("User-Agent", "ClaudTray")
-            .call()
-            .ok()?;
-        if resp.status().as_u16() != 200 {
-            return None;
-        }
-        let text = resp
-            .body_mut()
-            .with_config()
-            .limit(super::http::MAX_BODY_BYTES)
-            .read_to_string()
-            .ok()?;
-        let parsed: ModelsResp = serde_json::from_str(&text).ok()?;
-        Some(count_models(&parsed))
-    })
+    let mut resp = agent(false)
+        .get(&url)
+        .header("User-Agent", "ClaudTray")
+        .call()
+        .ok()?;
+    if resp.status().as_u16() != 200 {
+        return None;
+    }
+    let text = resp
+        .body_mut()
+        .with_config()
+        .limit(super::http::MAX_BODY_BYTES)
+        .read_to_string()
+        .ok()?;
+    let parsed: ModelsResp = serde_json::from_str(&text).ok()?;
+    Some(count_models(&parsed))
 }
 
 /// `(total models, models that support `generateContent`)`.

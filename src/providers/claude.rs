@@ -429,53 +429,40 @@ enum FetchError {
 }
 
 fn fetch_usage(token: &str) -> Result<UsageResponse, FetchError> {
-    let token = token.trim().to_string();
-    let mut last_err = FetchError::Other;
-    // Retry only transport-level failures. A definitive HTTP answer (401, 429,
-    // even 5xx) must NOT be retried in a tight loop — hammering the endpoint is
-    // what gets the token rate-limited in the first place.
-    for attempt in 0..3u64 {
-        if attempt > 0 {
-            std::thread::sleep(std::time::Duration::from_secs(attempt));
+    let token = token.trim();
+    // One attempt per tick: retrying would hold the refresh (and the UI) behind
+    // a slow endpoint, and hammering it is what gets the token rate-limited.
+    // The monitor's interval / `FAIL_RETRY` spacing re-tries later.
+    let mut resp = agent(false)
+        .get(USAGE_URL)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/json")
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("User-Agent", "ClaudTray")
+        .call()
+        .map_err(|_| FetchError::Other)?;
+    match resp.status().as_u16() {
+        200 => {
+            let text = resp
+                .body_mut()
+                .with_config()
+                .limit(super::http::MAX_BODY_BYTES)
+                .read_to_string()
+                .map_err(|_| FetchError::Other)?;
+            serde_json::from_str::<UsageResponse>(&text).map_err(|_| FetchError::Other)
         }
-        let mut resp = match agent(false)
-            .get(USAGE_URL)
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Accept", "application/json")
-            .header("Content-Type", "application/json")
-            .header("anthropic-beta", "oauth-2025-04-20")
-            .header("User-Agent", "ClaudTray")
-            .call()
-        {
-            Ok(r) => r,
-            Err(_) => continue, // transport error — worth retrying
-        };
-        match resp.status().as_u16() {
-            200 => {
-                let text = resp
-                    .body_mut()
-                    .with_config()
-                    .limit(super::http::MAX_BODY_BYTES)
-                    .read_to_string()
-                    .map_err(|_| FetchError::Other)?;
-                return serde_json::from_str::<UsageResponse>(&text).map_err(|_| FetchError::Other);
-            }
-            401 | 403 => return Err(FetchError::Auth),
-            429 => {
-                let retry_after = resp
-                    .headers()
-                    .get("retry-after")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|s| s.trim().parse::<u64>().ok());
-                return Err(FetchError::RateLimited(retry_after));
-            }
-            _ => {
-                last_err = FetchError::Other;
-                break;
-            }
+        401 | 403 => Err(FetchError::Auth),
+        429 => {
+            let retry_after = resp
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.trim().parse::<u64>().ok());
+            Err(FetchError::RateLimited(retry_after))
         }
+        _ => Err(FetchError::Other),
     }
-    Err(last_err)
 }
 
 #[cfg(test)]

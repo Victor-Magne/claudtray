@@ -104,36 +104,30 @@ impl CopilotProvider {
     }
 }
 
+/// One attempt: the monitor's interval / `FAIL_RETRY` spacing handles retries,
+/// so a slow provider never sleeps in the tick path.
 fn fetch(token: &str) -> Result<UserResp, Failure> {
-    let token = token.to_string();
-    let rejected = std::cell::Cell::new(false);
-    let resp = super::http::with_retry(3, 1, || {
-        let mut resp = agent(false)
-            .get("https://api.github.com/copilot_internal/user")
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Accept", "application/json")
-            .header("User-Agent", "ClaudTray")
-            .call()
-            .ok()?;
-        match resp.status().as_u16() {
-            200 => {}
-            // Only 401 means the token is dead; GitHub also answers 403 for
-            // rate limits.
-            401 => {
-                rejected.set(true);
-                return None;
-            }
-            _ => return None,
-        }
-        let text = resp
-            .body_mut()
-            .with_config()
-            .limit(super::http::MAX_BODY_BYTES)
-            .read_to_string()
-            .ok()?;
-        serde_json::from_str::<UserResp>(&text).ok()
-    });
-    resp.ok_or(if rejected.get() { Failure::Auth } else { Failure::Other })
+    let mut resp = agent(false)
+        .get("https://api.github.com/copilot_internal/user")
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/json")
+        .header("User-Agent", "ClaudTray")
+        .call()
+        .map_err(|_| Failure::Other)?;
+    match resp.status().as_u16() {
+        200 => {}
+        // Only 401 means the token is dead; GitHub also answers 403 for
+        // rate limits.
+        401 => return Err(Failure::Auth),
+        _ => return Err(Failure::Other),
+    }
+    let text = resp
+        .body_mut()
+        .with_config()
+        .limit(super::http::MAX_BODY_BYTES)
+        .read_to_string()
+        .map_err(|_| Failure::Other)?;
+    serde_json::from_str::<UserResp>(&text).map_err(|_| Failure::Other)
 }
 
 fn resolve_token(state: &AppState) -> Option<String> {

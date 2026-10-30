@@ -50,7 +50,7 @@ The app is a single-binary system tray application with a webview popover dashbo
 
 **Event model** (`main.rs`): A `tao` event loop drives everything on the UI thread. Background work is dispatched to OS threads via `std::thread::spawn` and results are sent back through `EventLoopProxy<UserEvent>`. Tokio is only used for the background timer ticker.
 
-**Data flow**: `QuotaMonitor::refresh()` (`monitor.rs`) spawns one OS thread per provider in parallel, collects `ProviderSnapshot`s, and assembles a `Snapshot`. Failed providers are held in a 30-second stale cache to avoid flickering. The snapshot is sent to the UI as `UserEvent::Snapshot` and pushed to the WebView via `webview.evaluate_script("window.updateData(...)")`.
+**Data flow**: `QuotaMonitor::refresh()` (`monitor.rs`) spawns one OS thread per due provider in parallel and assembles a `Snapshot` each time one finishes (the others show their cached value), so the UI never waits for the slowest provider; a provider still running after `PROVIDER_DEADLINE` (8 s) counts as failed for that tick. Providers get one attempt per tick (no sleeping retries); failed providers are held in a stale cache to avoid flickering. Each snapshot is sent to the UI as `UserEvent::Snapshot` and pushed to the WebView via `webview.evaluate_script("window.updateData(...)")`.
 
 **Dashboard** (`window.rs`): A frameless, always-on-top `tao` window with Windows 11 Mica backdrop, hosting a `wry` WebView2. The HTML/CSS/JS in `src/ui/` are embedded at compile time with `include_str!` — no separate build step for the frontend. JS→Rust communication uses `window.__WRY_IPC_POST__` with JSON messages (`IpcMessage` enum); Rust→JS uses `evaluate_script`.
 

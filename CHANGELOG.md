@@ -36,6 +36,12 @@ Releases before 1.4.0 are only tagged in git and described in their
   429s and timeouts while the popover was open. Skipped providers reuse their
   last snapshot without being marked stale; the manual refresh and saving a new
   credential still refresh everything at once.
+- The dashboard no longer waits for the slowest provider: each provider's
+  result is shown as soon as it arrives (the others keep their last value), and
+  a provider that has not answered within 8 s keeps its previous value marked
+  stale. Providers make one attempt per refresh instead of up to three with 1 s
+  and 2 s sleeps between them; a failed one is retried by the next refresh
+  rather than inside the same one.
 - Claude reads the usage cache shared with the DMS shell plugin
   (`~/.claude/usage-cache.json`, read-only) when it is under 90 s old and
   belongs to this machine's credentials, so both together make one request per

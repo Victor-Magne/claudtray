@@ -48,7 +48,8 @@ async fn main() {
     // Debug helper: `CLAUDTRAY_DUMP=1 claudtray` writes one snapshot to
     // %TEMP%/claudtray_snapshot.json and exits (no UI).
     if std::env::var("CLAUDTRAY_DUMP").is_ok() {
-        let snap = monitor.lock().unwrap().refresh();
+        let mut snap = None;
+        monitor.lock().unwrap().refresh(|s| snap = Some(s));
         let path = std::env::temp_dir().join("claudtray_snapshot.json");
         let _ = std::fs::write(&path, serde_json::to_string_pretty(&snap).unwrap_or_default());
         return;
@@ -428,17 +429,24 @@ async fn main() {
 /// Run a refresh on a background thread and deliver the snapshot to the UI. If a
 /// refresh (or token/theme update) already holds the lock, this tick is skipped
 /// so fast polling never piles up.
+/// Sends each snapshot of a refresh to the UI as soon as it is ready.
+fn emitter(proxy: &EventLoopProxy<UserEvent>) -> impl FnMut(Snapshot) {
+    let proxy = proxy.clone();
+    move |snap| {
+        let _ = proxy.send_event(UserEvent::Snapshot(snap));
+    }
+}
+
 fn spawn_refresh(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>, force: bool) {
     let monitor = Arc::clone(monitor);
     let proxy = proxy.clone();
     std::thread::spawn(move || {
-        let snapshot = match monitor.try_lock() {
+        match monitor.try_lock() {
             // `force` (manual refresh) bypasses each provider's min_interval.
-            Ok(mut guard) if force => guard.refresh_now(),
-            Ok(mut guard) => guard.refresh(),
-            Err(_) => return,
-        };
-        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+            Ok(mut guard) if force => guard.refresh_now(emitter(&proxy)),
+            Ok(mut guard) => guard.refresh(emitter(&proxy)),
+            Err(_) => {}
+        }
     });
 }
 
@@ -464,12 +472,9 @@ fn spawn_set_token(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>, t
     let monitor = Arc::clone(monitor);
     let proxy = proxy.clone();
     std::thread::spawn(move || {
-        let snapshot = {
-            let mut guard = monitor.lock().unwrap();
-            guard.set_copilot_token(&token);
-            guard.refresh_now()
-        };
-        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+        let mut guard = monitor.lock().unwrap();
+        guard.set_copilot_token(&token);
+        guard.refresh_now(emitter(&proxy));
     });
 }
 
@@ -515,12 +520,9 @@ fn spawn_set_claude_token(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEv
     let monitor = Arc::clone(monitor);
     let proxy = proxy.clone();
     std::thread::spawn(move || {
-        let snapshot = {
-            let mut guard = monitor.lock().unwrap();
-            guard.set_claude_token(&token);
-            guard.refresh_now()
-        };
-        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+        let mut guard = monitor.lock().unwrap();
+        guard.set_claude_token(&token);
+        guard.refresh_now(emitter(&proxy));
     });
 }
 
@@ -528,12 +530,9 @@ fn spawn_set_openrouter_key(monitor: &SharedMonitor, proxy: &EventLoopProxy<User
     let monitor = Arc::clone(monitor);
     let proxy = proxy.clone();
     std::thread::spawn(move || {
-        let snapshot = {
-            let mut guard = monitor.lock().unwrap();
-            guard.set_openrouter_key(&key);
-            guard.refresh_now()
-        };
-        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+        let mut guard = monitor.lock().unwrap();
+        guard.set_openrouter_key(&key);
+        guard.refresh_now(emitter(&proxy));
     });
 }
 
@@ -541,12 +540,9 @@ fn spawn_set_gemini_key(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEven
     let monitor = Arc::clone(monitor);
     let proxy = proxy.clone();
     std::thread::spawn(move || {
-        let snapshot = {
-            let mut guard = monitor.lock().unwrap();
-            guard.set_gemini_key(&key);
-            guard.refresh_now()
-        };
-        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+        let mut guard = monitor.lock().unwrap();
+        guard.set_gemini_key(&key);
+        guard.refresh_now(emitter(&proxy));
     });
 }
 
@@ -560,12 +556,9 @@ fn spawn_set_disabled_providers(
     let monitor = Arc::clone(monitor);
     let proxy = proxy.clone();
     std::thread::spawn(move || {
-        let snapshot = {
-            let mut guard = monitor.lock().unwrap();
-            guard.set_disabled_providers(ids);
-            guard.refresh_now()
-        };
-        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+        let mut guard = monitor.lock().unwrap();
+        guard.set_disabled_providers(ids);
+        guard.refresh_now(emitter(&proxy));
     });
 }
 

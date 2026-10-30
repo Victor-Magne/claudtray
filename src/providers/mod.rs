@@ -10,6 +10,7 @@ pub mod openrouter;
 
 use crate::model::ProviderSnapshot;
 use crate::state::AppState;
+use std::sync::Arc;
 
 /// A monitored AI coding assistant. `collect` returns a snapshot with the raw
 /// per-window usage filled in; for token-based providers the budget/percentage
@@ -25,15 +26,15 @@ pub trait Provider: Send + Sync {
 }
 
 /// All providers, in display order.
-pub fn all() -> Vec<Box<dyn Provider + Send + Sync>> {
+pub fn all() -> Vec<Arc<dyn Provider + Send + Sync>> {
     vec![
-        Box::new(claude::ClaudeProvider),
-        Box::new(antigravity::AntigravityProvider),
-        Box::new(codex::CodexProvider),
-        Box::new(copilot::CopilotProvider),
-        Box::new(openrouter::OpenRouterProvider),
-        Box::new(gemini::GeminiProvider),
-        Box::new(ollama::OllamaProvider),
+        Arc::new(claude::ClaudeProvider),
+        Arc::new(antigravity::AntigravityProvider),
+        Arc::new(codex::CodexProvider),
+        Arc::new(copilot::CopilotProvider),
+        Arc::new(openrouter::OpenRouterProvider),
+        Arc::new(gemini::GeminiProvider),
+        Arc::new(ollama::OllamaProvider),
     ]
 }
 
