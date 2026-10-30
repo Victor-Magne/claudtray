@@ -1,4 +1,4 @@
-use super::http::agent;
+use super::http::{agent, failure_for, Failure};
 use super::Provider;
 use crate::model::{ProviderSnapshot, WindowUsage};
 use crate::state::AppState;
@@ -34,6 +34,10 @@ impl Provider for CopilotProvider {
         "copilot"
     }
 
+    fn min_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(300)
+    }
+
     fn name(&self) -> &'static str {
         "Copilot"
     }
@@ -48,8 +52,14 @@ impl Provider for CopilotProvider {
         };
 
         match fetch(&token) {
-            Some(resp) => self.build(resp),
-            None => ProviderSnapshot::unavailable(self.id(), self.name(), "Falha ao obter quota"),
+            Ok(resp) => self.build(resp),
+            Err(Failure::Auth) => ProviderSnapshot::signed_out(
+                self.id(),
+                self.name(),
+                "Token rejeitado — atualiza-o nas definições",
+            ),
+            Err(f) => ProviderSnapshot::unavailable(self.id(), self.name(), "Falha ao obter quota")
+                .retry_in(f.retry_after()),
         }
     }
 }
@@ -84,34 +94,39 @@ impl CopilotProvider {
             windows: vec![window],
             total_tokens: None,
             estimated_cost_usd: None,
+            usage: None,
             local_models: Vec::new(),
             active_sessions: Vec::new(),
             stale_secs: None,
+            auth_failed: false,
+            retry_in_secs: None,
+            fetched_at: None,
         }
     }
 }
 
-fn fetch(token: &str) -> Option<UserResp> {
-    let token = token.to_string();
-    super::http::with_retry(3, 1, || {
-        let mut resp = agent(false)
-            .get("https://api.github.com/copilot_internal/user")
-            .header("Authorization", format!("Bearer {token}"))
-            .header("Accept", "application/json")
-            .header("User-Agent", "ClaudTray")
-            .call()
-            .ok()?;
-        if resp.status().as_u16() != 200 {
-            return None;
-        }
-        let text = resp
-            .body_mut()
-            .with_config()
-            .limit(super::http::MAX_BODY_BYTES)
-            .read_to_string()
-            .ok()?;
-        serde_json::from_str::<UserResp>(&text).ok()
-    })
+/// One attempt: the monitor's interval / `FAIL_RETRY` spacing handles retries,
+/// so a slow provider never sleeps in the tick path.
+fn fetch(token: &str) -> Result<UserResp, Failure> {
+    let mut resp = agent(false)
+        .get("https://api.github.com/copilot_internal/user")
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/json")
+        .header("User-Agent", "ClaudTray")
+        .call()
+        .map_err(|_| Failure::Other)?;
+    // Only 401 means the token is dead; GitHub also answers 403 for rate limits.
+    match resp.status().as_u16() {
+        200 => {}
+        st => return Err(failure_for(st, resp.headers())),
+    }
+    let text = resp
+        .body_mut()
+        .with_config()
+        .limit(super::http::MAX_BODY_BYTES)
+        .read_to_string()
+        .map_err(|_| Failure::Other)?;
+    serde_json::from_str::<UserResp>(&text).map_err(|_| Failure::Other)
 }
 
 fn resolve_token(state: &AppState) -> Option<String> {

@@ -59,6 +59,24 @@ const STRINGS = {
     updatedPrefix: "Atualizado ",
     staleNote: "Sem resposta do provider —",
     agoSuffix: (n, unit) => `há ${n}${unit}`,
+    retryIn: (d) => `a tentar de novo em ${d}`,
+    retryNow: "a tentar de novo…",
+    signedOut: "sessão terminada — volta a autenticar",
+    win5h: "Janela de 5h",
+    win7d: "Uso de 7 dias",
+    usedSuffix: "usado",
+    paceOn: "No ritmo",
+    paceUnder: (n) => `${n}% abaixo do ritmo`,
+    paceHot: (n) => `A gastar depressa (+${n}%)`,
+    sessionsMsgs: (s, m) => `${s} sessões · ${m} msgs`,
+    tokenConsumption: "Consumo de tokens",
+    today: "Hoje",
+    week: "Semana",
+    month: "Mês",
+    dailyActivity: "Atividade diária",
+    modelsWeek: "Modelos esta semana",
+    sinceLine: (d, s, m) => `Desde ${d} · ${s} sessões · ${m} msgs`,
+    weekdays: ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"],
   },
   en: {
     headerSub: "AI Usage Monitor",
@@ -103,6 +121,24 @@ const STRINGS = {
     updatedPrefix: "Updated ",
     staleNote: "No response from provider —",
     agoSuffix: (n, unit) => `${n}${unit} ago`,
+    retryIn: (d) => `retrying in ${d}`,
+    retryNow: "retrying…",
+    signedOut: "signed out — sign in again",
+    win5h: "5h Rate Window",
+    win7d: "7-Day Usage",
+    usedSuffix: "used",
+    paceOn: "On pace",
+    paceUnder: (n) => `${n}% under pace`,
+    paceHot: (n) => `Running hot (+${n}%)`,
+    sessionsMsgs: (s, m) => `${s} sessions · ${m} msgs`,
+    tokenConsumption: "Token Consumption",
+    today: "Today",
+    week: "Week",
+    month: "Month",
+    dailyActivity: "Daily Activity",
+    modelsWeek: "Models This Week",
+    sinceLine: (d, s, m) => `Since ${d} · ${s} sessions · ${m} msgs`,
+    weekdays: ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
   },
 };
 
@@ -182,8 +218,10 @@ function applyLanguagePref(pref) {
 }
 
 // ---- Data entry point (called from Rust) ----
+let dataReceivedAt = Date.now(); // base for counting `retry_in_secs` down between snapshots
 window.updateData = function (snapshot) {
   DATA = snapshot;
+  dataReceivedAt = Date.now();
   if (snapshot.theme) applyTheme(snapshot.theme);
   if (snapshot.language) applyLanguagePref(snapshot.language);
   if (snapshot.resolved_language && snapshot.resolved_language !== currentLang) {
@@ -235,7 +273,8 @@ function renderTabs() {
     el.className = "tab" + (p.id === activeProvider ? " active" : "");
     el.textContent = p.name;
     if (!p.available) el.style.opacity = "0.55";
-    if (p.stale_secs != null) el.title = t("staleNote") + " " + formatAgo(p.stale_secs);
+    el.dataset.pid = p.id;
+    el.title = tabTooltip(p);
     el.onclick = () => {
       activeProvider = p.id;
       render();
@@ -264,9 +303,12 @@ function renderCards() {
     note.textContent = p.note || t("noDataNote");
     div.appendChild(big);
     div.appendChild(note);
+    div.appendChild(freshLine(p));
     wrap.appendChild(div);
     return;
   }
+
+  wrap.appendChild(freshLine(p));
 
   if (p.stale_secs != null) {
     const stale = document.createElement("div");
@@ -275,7 +317,10 @@ function renderCards() {
     wrap.appendChild(stale);
   }
 
-  if (hasWindows) {
+  if (hasWindows && p.usage) {
+    // Claude: rings + the usage cards built from the local transcripts.
+    renderUsagePage(wrap, p);
+  } else if (hasWindows) {
     p.windows.forEach((w) => {
       const wide = w.key === "opus" || p.windows.length === 1;
       wrap.appendChild(card(w, wide));
@@ -286,12 +331,157 @@ function renderCards() {
     p.active_sessions.forEach((s) => wrap.appendChild(sessionCard(s)));
   }
 
-  if (p.total_tokens != null && p.total_tokens > 0) {
+  if (!p.usage && p.total_tokens != null && p.total_tokens > 0) {
     wrap.appendChild(totalTokensCard(p));
   }
 
   if (hasModels) {
     p.local_models.forEach((m) => wrap.appendChild(localModelCard(m)));
+  }
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgEl(name, attrs) {
+  const el = document.createElementNS(SVG_NS, name);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+
+function div(cls, text) {
+  const el = document.createElement("div");
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+// A ring that fills with the share USED, in the window's status colour, with a
+// tick where the elapsed time says it should be (the pace).
+function ring(w) {
+  const used = 100 - w.remaining_pct;
+  const R = 42;
+  const C = 2 * Math.PI * R;
+  const svg = svgEl("svg", { viewBox: "0 0 100 100", class: "ring" });
+  svg.appendChild(svgEl("circle", { class: "track", cx: 50, cy: 50, r: R }));
+  svg.appendChild(
+    svgEl("circle", {
+      class: "fg s-" + w.status,
+      cx: 50,
+      cy: 50,
+      r: R,
+      "stroke-dasharray": `${(C * used) / 100} ${C}`,
+      transform: "rotate(-90 50 50)",
+    })
+  );
+  if (w.pace_pct != null) {
+    const a = ((Math.min(100, Math.max(0, used + w.pace_pct)) * 3.6) * Math.PI) / 180;
+    const pt = (r) => [50 + r * Math.sin(a), 50 - r * Math.cos(a)];
+    const [x1, y1] = pt(R - 9);
+    const [x2, y2] = pt(R + 9);
+    svg.appendChild(svgEl("line", { class: "tick", x1, y1, x2, y2 }));
+  }
+  const label = svgEl("text", { x: 50, y: 52 });
+  label.textContent = used + "%";
+  svg.appendChild(label);
+  return svg;
+}
+
+// Within this many points of the expected pace counts as "on pace".
+const PACE_BAND = 5;
+
+function paceText(pace) {
+  if (pace == null) return null;
+  if (Math.abs(pace) <= PACE_BAND) return t("paceOn");
+  return pace > 0 ? t("paceUnder")(pace) : t("paceHot")(-pace);
+}
+
+function ringCard(w, p) {
+  const el = div("card wide ringcard");
+  el.appendChild(ring(w));
+  const text = div("rc-text");
+  const five = w.window_secs && w.window_secs <= 6 * 3600;
+  // w.label comes from the provider: textContent only.
+  const title = w.key === "session" ? t("win5h") : w.key === "weekly" ? t("win7d") : w.label;
+  text.appendChild(div("rc-title", five ? title : `${title} · ${100 - w.remaining_pct}%`));
+  if (five) text.appendChild(div("rc-sub used", `${100 - w.remaining_pct}% ${t("usedSuffix")}`));
+  const pace = paceText(w.pace_pct);
+  if (pace) text.appendChild(div("rc-sub", pace));
+  if (w.key === "weekly" && p.usage) {
+    const u = p.usage;
+    text.appendChild(div("rc-sub", t("sessionsMsgs")(u.sessions_7d, u.msgs_7d.toLocaleString())));
+  }
+  const reset = div("rc-sub reset");
+  reset.dataset.resetAt = w.reset_at || "";
+  reset.textContent = resetText(w.reset_at);
+  text.appendChild(reset);
+  if (w.estimated_exhaustion) {
+    const ex = div("rc-sub exhaustion", exhaustionText(w.estimated_exhaustion));
+    ex.dataset.exhaustionAt = w.estimated_exhaustion;
+    text.appendChild(ex);
+  }
+  el.appendChild(text);
+  return el;
+}
+
+function usageCard(title) {
+  const el = div("card wide");
+  el.appendChild(div("rc-title", title));
+  return el;
+}
+
+function renderUsagePage(wrap, p) {
+  const u = p.usage;
+  p.windows.forEach((w) => wrap.appendChild(ringCard(w, p)));
+
+  // Token consumption: today / week / month with the estimated cost.
+  const tok = usageCard(t("tokenConsumption"));
+  const grid = div("tok-grid");
+  [["today", u.today], ["week", u.week], ["month", u.month]].forEach(([k, v], i) => {
+    const col = div("tok-col");
+    col.appendChild(div("tok-label", t(k)));
+    col.appendChild(div("tok-val" + (i === 0 ? " hot" : ""), formatTokens(v.tokens)));
+    col.appendChild(div("tok-cost", "$" + v.cost.toFixed(v.cost < 100 ? 2 : 0)));
+    grid.appendChild(col);
+  });
+  tok.appendChild(grid);
+  wrap.appendChild(tok);
+
+  // Daily activity: one bar per weekday, today highlighted.
+  const act = usageCard(t("dailyActivity"));
+  const bars = div("bars7");
+  const max = Math.max(1, ...u.daily);
+  u.daily.forEach((v, i) => {
+    const col = div("col");
+    const bar = div("b" + (i === u.today_index ? " today" : ""));
+    bar.style.height = Math.max(3, Math.round((v / max) * 100)) + "%";
+    col.appendChild(bar);
+    col.appendChild(div("d" + (i === u.today_index ? " today" : ""), t("weekdays")[i]));
+    bars.appendChild(col);
+  });
+  act.appendChild(bars);
+  wrap.appendChild(act);
+
+  // Models this week: tokens per family, bars scaled to the largest.
+  if (u.models_week.length) {
+    const mod = usageCard(t("modelsWeek"));
+    const top = u.models_week[0].tokens || 1;
+    u.models_week.forEach((m) => {
+      const row = div("mrow");
+      row.appendChild(div("mname", `${m.model} ${formatTokens(m.tokens)}`));
+      const track = div("mtrack");
+      const fill = document.createElement("span");
+      fill.style.width = Math.round((m.tokens / top) * 100) + "%";
+      track.appendChild(fill);
+      row.appendChild(track);
+      mod.appendChild(row);
+    });
+    wrap.appendChild(mod);
+  }
+
+  if (u.since) {
+    wrap.appendChild(
+      div("card wide since", t("sinceLine")(u.since, u.sessions_total, u.msgs_total.toLocaleString()))
+    );
   }
 }
 
@@ -498,7 +688,12 @@ function resetText(iso) {
   const mins = Math.floor(diff / 60000);
   const h = Math.floor(mins / 60);
   const m = mins % 60;
-  const rel = h > 0 ? h + "h " + m + "m" : m + "m";
+  const rel =
+    h >= 24
+      ? Math.floor(h / 24) + "d " + (h % 24) + "h " + m + "m"
+      : h > 0
+        ? h + "h " + m + "m"
+        : m + "m";
   return t("resetsIn") + " " + rel + " · " + time;
 }
 
@@ -525,6 +720,57 @@ function formatAgo(secs) {
   return t("agoSuffix")(Math.floor(secs / 3600), "h");
 }
 
+// "5 min" / "30 s" for the retry countdown (same in both languages).
+function formatSpan(secs) {
+  if (secs < 60) return secs + " s";
+  if (secs < 3600) return Math.ceil(secs / 60) + " min";
+  return Math.ceil(secs / 3600) + " h";
+}
+
+// Per-provider freshness: when the last SUCCESSFUL collect was, plus what is
+// going on when the provider is failing. Derived from the snapshot and the
+// clock, so the 1 s timer re-renders it without any request.
+function freshText(p) {
+  const parts = [];
+  if (p.fetched_at) {
+    const secs = Math.max(0, Math.floor((Date.now() - new Date(p.fetched_at)) / 1000));
+    parts.push(t("updatedPrefix") + formatAgo(secs));
+  }
+  if (p.auth_failed) {
+    parts.push(t("signedOut"));
+  } else if (p.retry_in_secs != null) {
+    const left = p.retry_in_secs - Math.floor((Date.now() - dataReceivedAt) / 1000);
+    parts.push(left > 0 ? t("retryIn")(formatSpan(left)) : t("retryNow"));
+  }
+  return parts.join(" · ");
+}
+
+function tabTooltip(p) {
+  const stale = p.stale_secs != null ? t("staleNote") + " " + formatAgo(p.stale_secs) : "";
+  return [stale, freshText(p)].filter(Boolean).join("\n");
+}
+
+function freshLine(p) {
+  const el = div("fresh-line");
+  el.dataset.pid = p.id;
+  el.classList.toggle("alert", !!(p.auth_failed || p.retry_in_secs != null));
+  el.textContent = freshText(p); // textContent only: nothing here is trusted markup
+  return el;
+}
+
+function renderFresh() {
+  if (!DATA) return;
+  const byId = (id) => DATA.providers.find((x) => x.id === id);
+  document.querySelectorAll(".fresh-line").forEach((el) => {
+    const p = byId(el.dataset.pid);
+    if (p) el.textContent = freshText(p);
+  });
+  document.querySelectorAll("#tabs .tab").forEach((el) => {
+    const p = byId(el.dataset.pid);
+    if (p) el.title = tabTooltip(p);
+  });
+}
+
 function renderUpdated() {
   const el = document.getElementById("updated");
   if (!DATA || !DATA.updated_at) {
@@ -539,6 +785,7 @@ function renderUpdated() {
 // tick the relative labels + reset countdowns every second
 setInterval(() => {
   renderUpdated();
+  renderFresh();
   document.querySelectorAll(".reset:not(.exhaustion)").forEach((el) => {
     el.textContent = resetText(el.dataset.resetAt);
   });
@@ -667,6 +914,55 @@ document.getElementById("btn-save").onclick = () => {
 // activated. Intra-page focus moves (tabs, the settings input) don't fire it.
 window.addEventListener("blur", function () {
   sendIpc({ type: "blur" });
+});
+
+// Close when the pointer leaves the popover (layer-shell only, see above). A layer-shell surface keeps (or
+// never gets) keyboard focus while the pointer wanders off, so neither blur nor
+// Focused(false) fires. The 400 ms hysteresis is cancelled by re-entering; it
+// is not armed while a button is held (press/drag) or the Settings overlay is
+// open, and is re-checked when the timer fires. Rust only ever sees the final
+// decision, as `pointerLeave`.
+const LEAVE_DELAY_MS = 400;
+let pointerInside = false; // never closes a popover the pointer never entered
+let pointerPressed = false;
+let leaveTimer = null;
+
+function armPointerLeave() {
+  clearTimeout(leaveTimer);
+  leaveTimer = null;
+  // Rust sets __POINTER_LEAVE only on a Wayland layer-shell surface; elsewhere
+  // blur/click-away already closes the popover and leaving the window is normal.
+  if (window.__POINTER_LEAVE !== true) return;
+  if (pointerInside || pointerPressed) return;
+  leaveTimer = setTimeout(() => {
+    leaveTimer = null;
+    if (!pointerInside && !pointerPressed && !settings.classList.contains("open")) {
+      sendIpc({ type: "pointerLeave" });
+    }
+  }, LEAVE_DELAY_MS);
+}
+
+window.__setPointerInside = function (inside) {
+  pointerInside = inside;
+  armPointerLeave(); // entering clears any pending close
+};
+// WebView2: the DOM reports the pointer entering/leaving the document
+// (mouseout with a null relatedTarget). On Linux WebKitGTK never reports the
+// leave on a layer-shell surface, so Rust calls __setPointerInside from the
+// GTK crossing events instead (see watch_pointer in window.rs).
+document.addEventListener("mouseover", () => window.__setPointerInside(true));
+document.addEventListener("mouseout", (e) => {
+  if (!e.relatedTarget) window.__setPointerInside(false);
+});
+window.addEventListener("mousedown", () => {
+  pointerPressed = true;
+  armPointerLeave();
+});
+// Releasing outside the window after a drag: the leave was swallowed by the
+// press, so (re)arm now.
+window.addEventListener("mouseup", () => {
+  pointerPressed = false;
+  armPointerLeave();
 });
 
 // Close on Escape key press

@@ -1,5 +1,6 @@
 pub mod antigravity;
 pub mod claude;
+pub mod claude_usage;
 pub mod codex;
 pub mod copilot;
 pub mod gemini;
@@ -9,6 +10,7 @@ pub mod openrouter;
 
 use crate::model::ProviderSnapshot;
 use crate::state::AppState;
+use std::sync::Arc;
 
 /// A monitored AI coding assistant. `collect` returns a snapshot with the raw
 /// per-window usage filled in; for token-based providers the budget/percentage
@@ -16,19 +18,23 @@ use crate::state::AppState;
 pub trait Provider: Send + Sync {
     fn id(&self) -> &'static str;
     fn name(&self) -> &'static str;
+    /// Shortest gap between two `collect` calls: the monitor ticks every 5 s,
+    /// but quota APIs only change over minutes and rate-limit (429) when hit
+    /// every tick. Local (file/localhost) providers can be polled in seconds.
+    fn min_interval(&self) -> std::time::Duration;
     fn collect(&self, state: &AppState) -> ProviderSnapshot;
 }
 
 /// All providers, in display order.
-pub fn all() -> Vec<Box<dyn Provider + Send + Sync>> {
+pub fn all() -> Vec<Arc<dyn Provider + Send + Sync>> {
     vec![
-        Box::new(claude::ClaudeProvider),
-        Box::new(antigravity::AntigravityProvider),
-        Box::new(codex::CodexProvider),
-        Box::new(copilot::CopilotProvider),
-        Box::new(openrouter::OpenRouterProvider),
-        Box::new(gemini::GeminiProvider),
-        Box::new(ollama::OllamaProvider),
+        Arc::new(claude::ClaudeProvider),
+        Arc::new(antigravity::AntigravityProvider),
+        Arc::new(codex::CodexProvider),
+        Arc::new(copilot::CopilotProvider),
+        Arc::new(openrouter::OpenRouterProvider),
+        Arc::new(gemini::GeminiProvider),
+        Arc::new(ollama::OllamaProvider),
     ]
 }
 

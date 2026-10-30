@@ -23,6 +23,7 @@ use model::{Snapshot, Status, WindowUsage};
 use monitor::QuotaMonitor;
 #[cfg(windows)]
 use renderer::generate_dynamic_icon;
+use renderer::IconState;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -47,7 +48,8 @@ async fn main() {
     // Debug helper: `CLAUDTRAY_DUMP=1 claudtray` writes one snapshot to
     // %TEMP%/claudtray_snapshot.json and exits (no UI).
     if std::env::var("CLAUDTRAY_DUMP").is_ok() {
-        let snap = monitor.lock().unwrap().refresh();
+        let mut snap = None;
+        monitor.lock().unwrap().refresh(|s| snap = Some(s));
         let path = std::env::temp_dir().join("claudtray_snapshot.json");
         let _ = std::fs::write(&path, serde_json::to_string_pretty(&snap).unwrap_or_default());
         return;
@@ -92,7 +94,7 @@ async fn main() {
         (show_item, refresh_item, exit_item, show_id, refresh_id, exit_id)
     };
 
-    let initial_status = last.as_ref().map(|s| s.worst_status()).unwrap_or(Status::Healthy);
+    let initial_icon = last.as_ref().map(IconState::from_snapshot).unwrap_or_default();
     let initial_lang = Lang::from_pref(&language_pref);
     let initial_tooltip = last
         .as_ref()
@@ -109,7 +111,7 @@ async fn main() {
         .unwrap_or_else(Instant::now);
 
     #[cfg(windows)]
-    let icon = Icon::from_rgba(generate_dynamic_icon(initial_status), 64, 64)
+    let icon = Icon::from_rgba(generate_dynamic_icon(initial_icon), 64, 64)
         .expect("ícone RGBA inválido");
     // Attach the context menu to the tray and let tray-icon show it natively on
     // right-click. The library does the SetForegroundWindow + TrackPopupMenu
@@ -119,7 +121,7 @@ async fn main() {
     #[cfg(windows)]
     let mut tray: Option<TrayIcon> = Some(
         TrayIconBuilder::new()
-            .with_tooltip(initial_tooltip)
+            .with_tooltip(fit_windows_tooltip(&initial_tooltip))
             .with_icon(icon)
             .with_menu(Box::new(tray_menu))
             .with_menu_on_left_click(false)
@@ -130,7 +132,7 @@ async fn main() {
     // Linux: ksni serves the StatusNotifierItem + dbusmenu over D-Bus; clicks
     // and menu picks arrive as UserEvents through the same proxy (tray_linux.rs).
     #[cfg(target_os = "linux")]
-    let tray = tray_linux::spawn(proxy.clone(), initial_status, initial_tooltip, initial_lang).await;
+    let tray = tray_linux::spawn(proxy.clone(), initial_icon, initial_tooltip, initial_lang).await;
 
     // Forward tray + menu events into the event loop through the proxy. The
     // crate's default global channels are only drained when the loop happens to
@@ -177,18 +179,26 @@ async fn main() {
     // First refresh + adaptive background ticker. While the popover is open we
     // poll fast (near real-time); when it's hidden we slow down to spare the
     // provider APIs. All refreshes run off the UI thread (network I/O).
-    spawn_refresh(&monitor, &proxy);
+    spawn_refresh(&monitor, &proxy, false);
     // The dashboard is shown on launch (see below), so start the ticker on the
     // fast cadence right away.
     let dashboard_open = Arc::new(AtomicBool::new(true));
     let tick_proxy = proxy.clone();
     let ticker_open = Arc::clone(&dashboard_open);
+    // Visibility changes wake the ticker so it re-reads the cadence now instead
+    // of finishing a 60 s sleep picked while the popover was hidden.
+    let visibility_changed = Arc::new(tokio::sync::Notify::new());
+    let ticker_wake = Arc::clone(&visibility_changed);
     tokio::spawn(async move {
         loop {
-            let secs = if ticker_open.load(Ordering::Relaxed) { 5 } else { 60 };
-            tokio::time::sleep(Duration::from_secs(secs)).await;
-            if tick_proxy.send_event(UserEvent::Tick).is_err() {
-                break;
+            let delay = ticker_delay(ticker_open.load(Ordering::Relaxed));
+            tokio::select! {
+                _ = tokio::time::sleep(delay) => {
+                    if tick_proxy.send_event(UserEvent::Tick).is_err() {
+                        break;
+                    }
+                }
+                _ = ticker_wake.notified() => {}
             }
         }
     });
@@ -214,7 +224,7 @@ async fn main() {
         *control_flow = ControlFlow::Wait;
 
         match event {
-            Event::UserEvent(UserEvent::Tick) => spawn_refresh(&monitor, &proxy),
+            Event::UserEvent(UserEvent::Tick) => spawn_refresh(&monitor, &proxy, false),
             Event::UserEvent(UserEvent::Snapshot(snap)) => {
                 // Fire one notification for the worst window that newly needs
                 // attention — a fresh Critical/Depleted, a near-term projected
@@ -240,7 +250,7 @@ async fn main() {
                 update_tray(&mut tray, &snap, lang);
                 #[cfg(target_os = "linux")]
                 if let Some(handle) = &tray {
-                    tray_linux::update(handle, snap.worst_status(), tooltip(&snap, lang), lang);
+                    tray_linux::update(handle, IconState::from_snapshot(&snap), tooltip(&snap, lang), lang);
                 }
                 dashboard.push(&snap);
                 last = Some(snap);
@@ -268,7 +278,11 @@ async fn main() {
                 }
                 last_action = Instant::now();
             }
-            Event::UserEvent(UserEvent::MenuRefresh) => spawn_refresh(&monitor, &proxy),
+            #[cfg(target_os = "linux")]
+            Event::UserEvent(UserEvent::PointerInside(inside)) => {
+                dashboard.set_pointer_inside(inside);
+            }
+            Event::UserEvent(UserEvent::MenuRefresh) => spawn_refresh(&monitor, &proxy, true),
             Event::UserEvent(UserEvent::MenuExit) => {
                 #[cfg(windows)]
                 tray.take();
@@ -288,7 +302,7 @@ async fn main() {
                         dashboard.push(snap);
                     }
                 }
-                IpcMessage::Refresh => spawn_refresh(&monitor, &proxy),
+                IpcMessage::Refresh => spawn_refresh(&monitor, &proxy, true),
                 IpcMessage::SetTheme(theme) => {
                     // Applied instantly in JS; here we mirror the preference,
                     // retint the Mica backdrop and persist. "system" follows the
@@ -318,11 +332,8 @@ async fn main() {
                             .as_ref()
                             .map(|s| tooltip(s, lang))
                             .unwrap_or_else(|| l.tray_loading.to_string());
-                        let status = last
-                            .as_ref()
-                            .map(|s| s.worst_status())
-                            .unwrap_or(Status::Healthy);
-                        tray_linux::update(handle, status, tooltip_text, lang);
+                        let icon = last.as_ref().map(IconState::from_snapshot).unwrap_or_default();
+                        tray_linux::update(handle, icon, tooltip_text, lang);
                     }
                     spawn_set_language(&monitor, language);
                 }
@@ -353,6 +364,15 @@ async fn main() {
                 IpcMessage::Close => {
                     dashboard.hide();
                     last_action = Instant::now();
+                }
+                IpcMessage::PointerLeave => {
+                    // JS already waited out the hysteresis (and skipped it for
+                    // Settings/drags), so no `last_action` grace here: it would
+                    // swallow a legitimate leave and nothing re-sends it.
+                    if dashboard.is_visible() {
+                        dashboard.hide();
+                        last_action = Instant::now();
+                    }
                 }
                 IpcMessage::Blur => {
                     // Click-away: the webview lost focus to another window. We
@@ -409,23 +429,52 @@ async fn main() {
         }
 
         // Keep the ticker cadence in sync with popover visibility (fast when
-        // open, slow when hidden).
-        dashboard_open.store(dashboard.is_visible(), Ordering::Relaxed);
+        // open, slow when hidden). On a hidden -> shown edge (tray click, menu,
+        // any path) also refresh at once: the last snapshot is already painted,
+        // and a non-forced refresh only touches providers whose TTL elapsed, so
+        // opening and closing repeatedly cannot cost extra remote requests.
+        let visible = dashboard.is_visible();
+        let was_open = dashboard_open.swap(visible, Ordering::Relaxed);
+        if was_open != visible {
+            visibility_changed.notify_one();
+            if popover_opened(was_open, visible) {
+                spawn_refresh(&monitor, &proxy, false);
+            }
+        }
     });
+}
+
+/// Background refresh cadence: fast while the popover is open, slow while hidden.
+fn ticker_delay(open: bool) -> Duration {
+    Duration::from_secs(if open { 5 } else { 60 })
+}
+
+/// True on the hidden -> shown edge, the only transition that requests a refresh.
+fn popover_opened(was_open: bool, now_open: bool) -> bool {
+    !was_open && now_open
 }
 
 /// Run a refresh on a background thread and deliver the snapshot to the UI. If a
 /// refresh (or token/theme update) already holds the lock, this tick is skipped
 /// so fast polling never piles up.
-fn spawn_refresh(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>) {
+/// Sends each snapshot of a refresh to the UI as soon as it is ready.
+fn emitter(proxy: &EventLoopProxy<UserEvent>) -> impl FnMut(Snapshot) {
+    let proxy = proxy.clone();
+    move |snap| {
+        let _ = proxy.send_event(UserEvent::Snapshot(snap));
+    }
+}
+
+fn spawn_refresh(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>, force: bool) {
     let monitor = Arc::clone(monitor);
     let proxy = proxy.clone();
     std::thread::spawn(move || {
-        let snapshot = match monitor.try_lock() {
-            Ok(mut guard) => guard.refresh(),
-            Err(_) => return,
-        };
-        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+        match monitor.try_lock() {
+            // `force` (manual refresh) bypasses each provider's min_interval.
+            Ok(mut guard) if force => guard.refresh_now(emitter(&proxy)),
+            Ok(mut guard) => guard.refresh(emitter(&proxy)),
+            Err(_) => {}
+        }
     });
 }
 
@@ -451,12 +500,9 @@ fn spawn_set_token(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>, t
     let monitor = Arc::clone(monitor);
     let proxy = proxy.clone();
     std::thread::spawn(move || {
-        let snapshot = {
-            let mut guard = monitor.lock().unwrap();
-            guard.set_copilot_token(&token);
-            guard.refresh()
-        };
-        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+        let mut guard = monitor.lock().unwrap();
+        guard.set_copilot_token(&token);
+        guard.refresh_now(emitter(&proxy));
     });
 }
 
@@ -484,16 +530,16 @@ fn acquire_instance_lock() -> Result<Option<std::fs::File>, ()> {
     }
 }
 
-/// Refresh the tray icon colour + tooltip from the latest snapshot.
+/// Refresh the tray icon (colour + mark) + tooltip from the latest snapshot.
 #[cfg(windows)]
 fn update_tray(tray: &mut Option<TrayIcon>, snap: &Snapshot, lang: Lang) {
     let Some(t) = tray else {
         return;
     };
-    if let Ok(icon) = Icon::from_rgba(generate_dynamic_icon(snap.worst_status()), 64, 64) {
+    if let Ok(icon) = Icon::from_rgba(generate_dynamic_icon(IconState::from_snapshot(snap)), 64, 64) {
         let _ = t.set_icon(Some(icon));
     }
-    let _ = t.set_tooltip(Some(tooltip(snap, lang)));
+    let _ = t.set_tooltip(Some(fit_windows_tooltip(&tooltip(snap, lang))));
 }
 
 /// Store the Claude OAuth token (from `claude setup-token`) and refresh so the
@@ -502,12 +548,9 @@ fn spawn_set_claude_token(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEv
     let monitor = Arc::clone(monitor);
     let proxy = proxy.clone();
     std::thread::spawn(move || {
-        let snapshot = {
-            let mut guard = monitor.lock().unwrap();
-            guard.set_claude_token(&token);
-            guard.refresh()
-        };
-        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+        let mut guard = monitor.lock().unwrap();
+        guard.set_claude_token(&token);
+        guard.refresh_now(emitter(&proxy));
     });
 }
 
@@ -515,12 +558,9 @@ fn spawn_set_openrouter_key(monitor: &SharedMonitor, proxy: &EventLoopProxy<User
     let monitor = Arc::clone(monitor);
     let proxy = proxy.clone();
     std::thread::spawn(move || {
-        let snapshot = {
-            let mut guard = monitor.lock().unwrap();
-            guard.set_openrouter_key(&key);
-            guard.refresh()
-        };
-        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+        let mut guard = monitor.lock().unwrap();
+        guard.set_openrouter_key(&key);
+        guard.refresh_now(emitter(&proxy));
     });
 }
 
@@ -528,12 +568,9 @@ fn spawn_set_gemini_key(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEven
     let monitor = Arc::clone(monitor);
     let proxy = proxy.clone();
     std::thread::spawn(move || {
-        let snapshot = {
-            let mut guard = monitor.lock().unwrap();
-            guard.set_gemini_key(&key);
-            guard.refresh()
-        };
-        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+        let mut guard = monitor.lock().unwrap();
+        guard.set_gemini_key(&key);
+        guard.refresh_now(emitter(&proxy));
     });
 }
 
@@ -547,12 +584,9 @@ fn spawn_set_disabled_providers(
     let monitor = Arc::clone(monitor);
     let proxy = proxy.clone();
     std::thread::spawn(move || {
-        let snapshot = {
-            let mut guard = monitor.lock().unwrap();
-            guard.set_disabled_providers(ids);
-            guard.refresh()
-        };
-        let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
+        let mut guard = monitor.lock().unwrap();
+        guard.set_disabled_providers(ids);
+        guard.refresh_now(emitter(&proxy));
     });
 }
 
@@ -591,6 +625,7 @@ pub struct Alert {
     pct: u32,
     kind: AlertKind,
     /// `"{provider_id}:{window_key}:{kind_tag}"` — the de-dup identity.
+    /// Provider-level alerts use `-` as the window key.
     dedup_key: String,
 }
 
@@ -604,6 +639,9 @@ pub enum AlertKind {
     ExhaustsSoon(i64),
     /// Critically low, but the window resets in `.0` minutes — just wait.
     ResetsSoon(i64),
+    /// The provider rejected the user's token: sign in again. Provider-level,
+    /// not tied to a window.
+    SignedOut,
 }
 
 impl AlertKind {
@@ -614,6 +652,7 @@ impl AlertKind {
             AlertKind::Depleted => "depleted",
             AlertKind::ExhaustsSoon(_) => "exhausts",
             AlertKind::ResetsSoon(_) => "resets",
+            AlertKind::SignedOut => "signedout",
         }
     }
 
@@ -621,7 +660,7 @@ impl AlertKind {
     fn severity(self) -> u8 {
         match self {
             AlertKind::Depleted => 3,
-            AlertKind::EnteredCritical | AlertKind::ResetsSoon(_) => 2,
+            AlertKind::EnteredCritical | AlertKind::ResetsSoon(_) | AlertKind::SignedOut => 2,
             AlertKind::ExhaustsSoon(_) => 1,
         }
     }
@@ -651,6 +690,11 @@ impl AlertState {
             else {
                 return false;
             };
+            // Provider-level: lives exactly as long as the token stays rejected,
+            // so it fires once and again only after a recovery.
+            if tag == AlertKind::SignedOut.tag() {
+                return snap.providers.iter().any(|p| p.id == pid && p.auth_failed);
+            }
             snap.providers
                 .iter()
                 .find(|p| p.id == pid && p.available)
@@ -700,6 +744,19 @@ fn classify(w: &WindowUsage, now: DateTime<Local>) -> Option<AlertKind> {
 fn alerts_due(snap: &Snapshot, state: &AlertState, now: DateTime<Local>) -> Vec<Alert> {
     let mut due = Vec::new();
     for p in &snap.providers {
+        if p.auth_failed {
+            let kind = AlertKind::SignedOut;
+            let dedup_key = format!("{}:-:{}", p.id, kind.tag());
+            if !state.fired.contains(&dedup_key) {
+                due.push(Alert {
+                    provider: p.name.clone(),
+                    label: String::new(),
+                    pct: 0,
+                    kind,
+                    dedup_key,
+                });
+            }
+        }
         if !p.available {
             continue;
         }
@@ -731,6 +788,7 @@ fn alert_text(due: &[Alert], lang: Lang) -> (String, String) {
         AlertKind::Depleted => l.alert_depleted_title,
         AlertKind::EnteredCritical => l.alert_critical_title,
         AlertKind::ExhaustsSoon(_) | AlertKind::ResetsSoon(_) => l.alert_predictive_title,
+        AlertKind::SignedOut => l.alert_signed_out_title,
     }
     .to_string();
     let fill = |s: &str| {
@@ -743,6 +801,7 @@ fn alert_text(due: &[Alert], lang: Lang) -> (String, String) {
         AlertKind::EnteredCritical => fill(l.alert_body_remaining),
         AlertKind::ExhaustsSoon(m) => fill(l.alert_predictive_body).replace("{mins}", &m.to_string()),
         AlertKind::ResetsSoon(m) => fill(l.alert_reset_soon_body).replace("{mins}", &m.to_string()),
+        AlertKind::SignedOut => fill(l.alert_signed_out_body),
     };
     (title, body)
 }
@@ -757,47 +816,76 @@ fn relative_until(rfc: &str, now: DateTime<Local>) -> Option<String> {
     })
 }
 
-/// Tray tooltip text: Claude keeps its familiar SESSION%/WEEKLY% line; otherwise
-/// (or when Claude has no such windows) show the single worst window across every
-/// visible provider, with its reset countdown.
+/// Tray tooltip: a "ClaudTray" header plus one row per provider, worst first (so
+/// a host that clips the tooltip drops the healthiest). A row is the provider's
+/// lowest window with its reset countdown; Claude keeps its familiar
+/// SESSION%/WEEKLY% pair. Signed-out providers get a row too, and stale data is
+/// flagged, so the tooltip explains the icon's mark.
 fn tooltip(snap: &Snapshot, lang: Lang) -> String {
     let l = catalog(lang);
+    let now = Local::now();
+    let mut rows: Vec<(u32, String)> = Vec::new();
 
-    if let Some(claude) = snap.providers.iter().find(|p| p.id == "claude" && p.available) {
-        let pct = |key: &str| {
-            claude
-                .windows
-                .iter()
-                .find(|w| w.key == key)
-                .map(|w| w.remaining_pct)
-        };
-        if let (Some(s), Some(w)) = (pct("session"), pct("weekly")) {
-            return format!(
-                "ClaudTray — {} {}% · {} {}%",
-                l.tooltip_session, s, l.tooltip_weekly, w
-            );
+    for p in &snap.providers {
+        if p.auth_failed {
+            rows.push((0, format!("{}: {}", p.name, l.tooltip_signed_out)));
+            continue;
         }
+        let Some(w) = p
+            .available
+            .then(|| p.windows.iter().min_by_key(|w| w.remaining_pct))
+            .flatten()
+        else {
+            continue;
+        };
+        let pct = |key: &str| p.windows.iter().find(|w| w.key == key).map(|w| w.remaining_pct);
+        let mut row = match (p.id.as_str(), pct("session"), pct("weekly")) {
+            ("claude", Some(s), Some(wk)) => format!(
+                "{} {} {}% · {} {}%",
+                p.name, l.tooltip_session, s, l.tooltip_weekly, wk
+            ),
+            _ => {
+                let mut r = format!("{} {} {}%", p.name, w.label, w.remaining_pct);
+                if let Some(rel) = w.reset_at.as_deref().and_then(|r| relative_until(r, now)) {
+                    r.push_str(&format!(" · {} {}", l.tooltip_reset, rel));
+                }
+                r
+            }
+        };
+        if p.stale_secs.is_some() {
+            row.push_str(&format!(" · {}", l.tooltip_stale));
+        }
+        rows.push((w.remaining_pct, row));
     }
 
-    let worst = snap
-        .providers
-        .iter()
-        .filter(|p| p.available)
-        .flat_map(|p| p.windows.iter().map(move |w| (p, w)))
-        .max_by_key(|(_, w)| w.status.rank());
-
-    let Some((p, w)) = worst else {
+    if rows.is_empty() {
         return l.tooltip_default.to_string();
-    };
-    let mut line = format!("ClaudTray — {} {} {}%", p.name, w.label, w.remaining_pct);
-    if let Some(rel) = w
-        .reset_at
-        .as_deref()
-        .and_then(|r| relative_until(r, Local::now()))
-    {
-        line.push_str(&format!(" · {} {}", l.tooltip_reset, rel));
     }
-    line
+    rows.sort_by_key(|(pct, _)| *pct); // stable: ties keep provider order
+    let body: Vec<String> = rows.into_iter().map(|(_, r)| r).collect();
+    format!("ClaudTray\n{}", body.join("\n"))
+}
+
+/// Windows' tray tooltip (`NOTIFYICONDATA.szTip`) holds 127 UTF-16 units and the
+/// tray-icon crate cuts anything longer mid-row. Drop whole trailing rows
+/// instead (rows are worst-first, so the healthiest go first).
+#[cfg(any(windows, test))]
+fn fit_windows_tooltip(text: &str) -> String {
+    const MAX_UNITS: usize = 127;
+    let mut out = String::new();
+    let mut units = 0;
+    for (i, line) in text.split('\n').enumerate() {
+        let add = line.encode_utf16().count() + usize::from(i > 0);
+        if units + add > MAX_UNITS && i > 0 {
+            break;
+        }
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(line);
+        units += add;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -825,9 +913,13 @@ mod alert_tests {
                 windows,
                 total_tokens: None,
                 estimated_cost_usd: None,
+                usage: None,
                 local_models: Vec::new(),
                 active_sessions: Vec::new(),
                 stale_secs: None,
+                auth_failed: false,
+                retry_in_secs: None,
+                fetched_at: None,
             }],
             catalog: Vec::new(),
             history: Default::default(),
@@ -892,6 +984,110 @@ mod alert_tests {
         assert_eq!(alerts_due(&bad, &state, now).len(), 1);
     }
 
+    fn signed_out_snapshot() -> Snapshot {
+        let mut snap = snapshot("claude", "Claude", Vec::new());
+        snap.providers[0] = ProviderSnapshot::signed_out("claude", "Claude", "x");
+        snap
+    }
+
+    #[test]
+    fn signed_out_fires_once_and_survives_prune() {
+        let now = Local::now();
+        let snap = signed_out_snapshot();
+        let mut state = AlertState::default();
+
+        let due = alerts_due(&snap, &state, now);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].kind, AlertKind::SignedOut);
+        state.mark_fired(&due);
+
+        // The provider is unavailable with no windows; prune must still keep the
+        // key or the alert would repeat on every refresh.
+        state.prune(&snap, now);
+        assert!(alerts_due(&snap, &state, now).is_empty());
+    }
+
+    #[test]
+    fn signed_out_alerts_again_after_recovery() {
+        let now = Local::now();
+        let out = signed_out_snapshot();
+        let mut state = AlertState::default();
+        state.mark_fired(&alerts_due(&out, &state, now));
+
+        state.prune(&snapshot("claude", "Claude", vec![window(80, None, None)]), now);
+        assert_eq!(alerts_due(&out, &state, now).len(), 1);
+    }
+
+    #[test]
+    fn signed_out_text_names_the_provider() {
+        let due = alerts_due(&signed_out_snapshot(), &AlertState::default(), Local::now());
+        let (_, body) = alert_text(&due, Lang::En);
+        assert!(body.contains("Claude") && body.contains("signed out"), "got: {body}");
+    }
+
+    fn provider(id: &str, name: &str, pct: u32) -> ProviderSnapshot {
+        let mut p = ProviderSnapshot::unavailable(id, name, "");
+        p.available = true;
+        p.windows = vec![WindowUsage::from_percent("weekly", "WEEKLY", pct, None)];
+        p
+    }
+
+    #[test]
+    fn tooltip_has_one_row_per_provider_worst_first() {
+        let mut snap = snapshot("a", "Alpha", Vec::new());
+        snap.providers = vec![provider("a", "Alpha", 80), provider("b", "Beta", 5)];
+        let t = tooltip(&snap, Lang::En);
+        let rows: Vec<&str> = t.lines().collect();
+        assert_eq!(rows, ["ClaudTray", "Beta WEEKLY 5%", "Alpha WEEKLY 80%"], "got: {t}");
+    }
+
+    #[test]
+    fn tooltip_row_shows_lowest_window_and_reset() {
+        let reset = (Local::now() + chrono::Duration::minutes(65)).to_rfc3339();
+        let mut snap = snapshot("a", "Alpha", Vec::new());
+        snap.providers = vec![provider("a", "Alpha", 80)];
+        snap.providers[0].windows = vec![
+            WindowUsage::from_percent("session", "SESSION", 70, None),
+            WindowUsage::from_percent("weekly", "WEEKLY", 30, Some(reset)),
+        ];
+        let t = tooltip(&snap, Lang::En);
+        assert!(t.contains("Alpha WEEKLY 30% · resets in 1h"), "got: {t}");
+        assert!(!t.contains("70%"), "got: {t}");
+    }
+
+    #[test]
+    fn tooltip_flags_signed_out_and_stale_and_skips_unavailable() {
+        let mut snap = snapshot("a", "Alpha", Vec::new());
+        let mut stale = provider("b", "Beta", 40);
+        stale.stale_secs = Some(12);
+        snap.providers = vec![
+            ProviderSnapshot::signed_out("a", "Alpha", "x"),
+            stale,
+            ProviderSnapshot::unavailable("c", "Gamma", "off"),
+        ];
+        let t = tooltip(&snap, Lang::En);
+        assert!(t.contains("Alpha: signed out"), "got: {t}");
+        assert!(t.contains("Beta WEEKLY 40% · stale"), "got: {t}");
+        assert!(!t.contains("Gamma"), "got: {t}");
+        assert!(tooltip(&snap, Lang::Pt).contains("Alpha: sessão terminada"));
+    }
+
+    #[test]
+    fn tooltip_without_data_is_the_default() {
+        let snap = snapshot("a", "Alpha", Vec::new());
+        assert_eq!(tooltip(&snap, Lang::En), catalog(Lang::En).tooltip_default);
+    }
+
+    #[test]
+    fn windows_tooltip_drops_whole_rows_over_127_units() {
+        let row = "x".repeat(35);
+        let text = format!("ClaudTray\n{row}\n{row}\n{row}\n{row}");
+        let fit = fit_windows_tooltip(&text);
+        assert_eq!(fit, format!("ClaudTray\n{row}\n{row}\n{row}"));
+        assert!(fit.encode_utf16().count() <= 127);
+        assert_eq!(fit_windows_tooltip("short"), "short");
+    }
+
     #[test]
     fn tooltip_shows_worst_non_claude_window() {
         let snap = snapshot("copilot", "Copilot", vec![window(12, None, None)]);
@@ -913,5 +1109,19 @@ mod alert_tests {
         let t = tooltip(&snap, Lang::En);
         assert!(t.contains("SESSION 50%"), "got: {t}");
         assert!(t.contains("WEEKLY 80%"), "got: {t}");
+    }
+
+    #[test]
+    fn ticker_is_fast_when_open_and_slow_when_hidden() {
+        assert_eq!(ticker_delay(true), Duration::from_secs(5));
+        assert_eq!(ticker_delay(false), Duration::from_secs(60));
+    }
+
+    #[test]
+    fn only_the_hidden_to_shown_edge_requests_a_refresh() {
+        assert!(popover_opened(false, true));
+        assert!(!popover_opened(true, true));
+        assert!(!popover_opened(false, false));
+        assert!(!popover_opened(true, false));
     }
 }

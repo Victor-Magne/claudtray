@@ -21,6 +21,10 @@ impl Provider for AntigravityProvider {
         "antigravity"
     }
 
+    fn min_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(4) // local; just under the 5 s tick so jitter never skips one
+    }
+
     fn name(&self) -> &'static str {
         "Antigravity"
     }
@@ -52,9 +56,13 @@ impl Provider for AntigravityProvider {
                             windows,
                             total_tokens: None,
                             estimated_cost_usd: None,
+                            usage: None,
                             local_models: Vec::new(),
                             active_sessions: Vec::new(),
                             stale_secs: None,
+                            auth_failed: false,
+                            retry_in_secs: None,
+                            fetched_at: None,
                         };
                     }
                 }

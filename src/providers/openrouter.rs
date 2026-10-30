@@ -1,4 +1,4 @@
-use super::http::agent;
+use super::http::{agent, failure_for, Failure};
 use super::Provider;
 use crate::model::{ProviderSnapshot, WindowUsage};
 use crate::state::AppState;
@@ -26,6 +26,10 @@ impl Provider for OpenRouterProvider {
         "openrouter"
     }
 
+    fn min_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(300)
+    }
+
     fn name(&self) -> &'static str {
         "OpenRouter"
     }
@@ -40,12 +44,18 @@ impl Provider for OpenRouterProvider {
         };
 
         match fetch(key) {
-            Some(data) => self.build(data),
-            None => ProviderSnapshot::unavailable(
+            Ok(data) => self.build(data),
+            Err(Failure::Auth) => ProviderSnapshot::signed_out(
+                self.id(),
+                self.name(),
+                "API key rejeitada — atualiza-a nas definições",
+            ),
+            Err(f) => ProviderSnapshot::unavailable(
                 self.id(),
                 self.name(),
                 "Falha ao obter créditos (key inválida?)",
-            ),
+            )
+            .retry_in(f.retry_after()),
         }
     }
 }
@@ -76,34 +86,39 @@ impl OpenRouterProvider {
             windows: vec![window],
             total_tokens: None,
             estimated_cost_usd: None,
+            usage: None,
             local_models: Vec::new(),
             active_sessions: Vec::new(),
             stale_secs: None,
+            auth_failed: false,
+            retry_in_secs: None,
+            fetched_at: None,
         }
     }
 }
 
-fn fetch(key: &str) -> Option<KeyData> {
-    let key = key.to_string();
-    super::http::with_retry(3, 1, || {
-        let mut resp = agent(false)
-            .get("https://openrouter.ai/api/v1/auth/key")
-            .header("Authorization", format!("Bearer {key}"))
-            .header("User-Agent", "ClaudTray")
-            .call()
-            .ok()?;
-        if resp.status().as_u16() != 200 {
-            return None;
-        }
-        let text = resp
-            .body_mut()
-            .with_config()
-            .limit(super::http::MAX_BODY_BYTES)
-            .read_to_string()
-            .ok()?;
-        let parsed: KeyResp = serde_json::from_str(&text).ok()?;
-        parsed.data
-    })
+/// One attempt: the monitor's interval / `FAIL_RETRY` spacing handles retries,
+/// so a slow provider never sleeps in the tick path.
+fn fetch(key: &str) -> Result<KeyData, Failure> {
+    let mut resp = agent(false)
+        .get("https://openrouter.ai/api/v1/auth/key")
+        .header("Authorization", format!("Bearer {key}"))
+        .header("User-Agent", "ClaudTray")
+        .call()
+        .map_err(|_| Failure::Other)?;
+    // 401 = bad key; 402 only means out of credits.
+    match resp.status().as_u16() {
+        200 => {}
+        st => return Err(failure_for(st, resp.headers())),
+    }
+    let text = resp
+        .body_mut()
+        .with_config()
+        .limit(super::http::MAX_BODY_BYTES)
+        .read_to_string()
+        .map_err(|_| Failure::Other)?;
+    let parsed: KeyResp = serde_json::from_str(&text).map_err(|_| Failure::Other)?;
+    parsed.data.ok_or(Failure::Other)
 }
 
 #[cfg(test)]
