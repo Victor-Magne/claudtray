@@ -137,9 +137,23 @@ pub struct ProviderSnapshot {
     /// the numbers are no longer live instead of showing stale data as current.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale_secs: Option<u64>,
+    /// The provider rejected the user's token (HTTP 401): they have to sign in
+    /// again. Drives the one-shot "signed out" notification. Never set for a
+    /// token ClaudTray picked up on its own (a short-lived CLI token expiring
+    /// is normal, not an alert).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auth_failed: bool,
 }
 
 impl ProviderSnapshot {
+    /// An unavailable snapshot whose cause is a rejected token.
+    pub fn signed_out(id: &str, name: &str, note: &str) -> Self {
+        Self {
+            auth_failed: true,
+            ..Self::unavailable(id, name, note)
+        }
+    }
+
     pub fn unavailable(id: &str, name: &str, note: &str) -> Self {
         Self {
             id: id.to_string(),
@@ -152,6 +166,7 @@ impl ProviderSnapshot {
             local_models: Vec::new(),
             active_sessions: Vec::new(),
             stale_secs: None,
+            auth_failed: false,
         }
     }
 }

@@ -591,6 +591,7 @@ pub struct Alert {
     pct: u32,
     kind: AlertKind,
     /// `"{provider_id}:{window_key}:{kind_tag}"` — the de-dup identity.
+    /// Provider-level alerts use `-` as the window key.
     dedup_key: String,
 }
 
@@ -604,6 +605,9 @@ pub enum AlertKind {
     ExhaustsSoon(i64),
     /// Critically low, but the window resets in `.0` minutes — just wait.
     ResetsSoon(i64),
+    /// The provider rejected the user's token: sign in again. Provider-level,
+    /// not tied to a window.
+    SignedOut,
 }
 
 impl AlertKind {
@@ -614,6 +618,7 @@ impl AlertKind {
             AlertKind::Depleted => "depleted",
             AlertKind::ExhaustsSoon(_) => "exhausts",
             AlertKind::ResetsSoon(_) => "resets",
+            AlertKind::SignedOut => "signedout",
         }
     }
 
@@ -621,7 +626,7 @@ impl AlertKind {
     fn severity(self) -> u8 {
         match self {
             AlertKind::Depleted => 3,
-            AlertKind::EnteredCritical | AlertKind::ResetsSoon(_) => 2,
+            AlertKind::EnteredCritical | AlertKind::ResetsSoon(_) | AlertKind::SignedOut => 2,
             AlertKind::ExhaustsSoon(_) => 1,
         }
     }
@@ -651,6 +656,11 @@ impl AlertState {
             else {
                 return false;
             };
+            // Provider-level: lives exactly as long as the token stays rejected,
+            // so it fires once and again only after a recovery.
+            if tag == AlertKind::SignedOut.tag() {
+                return snap.providers.iter().any(|p| p.id == pid && p.auth_failed);
+            }
             snap.providers
                 .iter()
                 .find(|p| p.id == pid && p.available)
@@ -700,6 +710,19 @@ fn classify(w: &WindowUsage, now: DateTime<Local>) -> Option<AlertKind> {
 fn alerts_due(snap: &Snapshot, state: &AlertState, now: DateTime<Local>) -> Vec<Alert> {
     let mut due = Vec::new();
     for p in &snap.providers {
+        if p.auth_failed {
+            let kind = AlertKind::SignedOut;
+            let dedup_key = format!("{}:-:{}", p.id, kind.tag());
+            if !state.fired.contains(&dedup_key) {
+                due.push(Alert {
+                    provider: p.name.clone(),
+                    label: String::new(),
+                    pct: 0,
+                    kind,
+                    dedup_key,
+                });
+            }
+        }
         if !p.available {
             continue;
         }
@@ -731,6 +754,7 @@ fn alert_text(due: &[Alert], lang: Lang) -> (String, String) {
         AlertKind::Depleted => l.alert_depleted_title,
         AlertKind::EnteredCritical => l.alert_critical_title,
         AlertKind::ExhaustsSoon(_) | AlertKind::ResetsSoon(_) => l.alert_predictive_title,
+        AlertKind::SignedOut => l.alert_signed_out_title,
     }
     .to_string();
     let fill = |s: &str| {
@@ -743,6 +767,7 @@ fn alert_text(due: &[Alert], lang: Lang) -> (String, String) {
         AlertKind::EnteredCritical => fill(l.alert_body_remaining),
         AlertKind::ExhaustsSoon(m) => fill(l.alert_predictive_body).replace("{mins}", &m.to_string()),
         AlertKind::ResetsSoon(m) => fill(l.alert_reset_soon_body).replace("{mins}", &m.to_string()),
+        AlertKind::SignedOut => fill(l.alert_signed_out_body),
     };
     (title, body)
 }
@@ -828,6 +853,7 @@ mod alert_tests {
                 local_models: Vec::new(),
                 active_sessions: Vec::new(),
                 stale_secs: None,
+                auth_failed: false,
             }],
             catalog: Vec::new(),
             history: Default::default(),
@@ -890,6 +916,47 @@ mod alert_tests {
         state.prune(&bad, now); // back to zero later
 
         assert_eq!(alerts_due(&bad, &state, now).len(), 1);
+    }
+
+    fn signed_out_snapshot() -> Snapshot {
+        let mut snap = snapshot("claude", "Claude", Vec::new());
+        snap.providers[0] = ProviderSnapshot::signed_out("claude", "Claude", "x");
+        snap
+    }
+
+    #[test]
+    fn signed_out_fires_once_and_survives_prune() {
+        let now = Local::now();
+        let snap = signed_out_snapshot();
+        let mut state = AlertState::default();
+
+        let due = alerts_due(&snap, &state, now);
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].kind, AlertKind::SignedOut);
+        state.mark_fired(&due);
+
+        // The provider is unavailable with no windows; prune must still keep the
+        // key or the alert would repeat on every refresh.
+        state.prune(&snap, now);
+        assert!(alerts_due(&snap, &state, now).is_empty());
+    }
+
+    #[test]
+    fn signed_out_alerts_again_after_recovery() {
+        let now = Local::now();
+        let out = signed_out_snapshot();
+        let mut state = AlertState::default();
+        state.mark_fired(&alerts_due(&out, &state, now));
+
+        state.prune(&snapshot("claude", "Claude", vec![window(80, None, None)]), now);
+        assert_eq!(alerts_due(&out, &state, now).len(), 1);
+    }
+
+    #[test]
+    fn signed_out_text_names_the_provider() {
+        let due = alerts_due(&signed_out_snapshot(), &AlertState::default(), Local::now());
+        let (_, body) = alert_text(&due, Lang::En);
+        assert!(body.contains("Claude") && body.contains("signed out"), "got: {body}");
     }
 
     #[test]

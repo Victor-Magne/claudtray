@@ -1,4 +1,4 @@
-use super::http::agent;
+use super::http::{agent, Failure};
 use super::Provider;
 use crate::model::{ProviderSnapshot, WindowUsage};
 use crate::state::AppState;
@@ -48,8 +48,15 @@ impl Provider for CopilotProvider {
         };
 
         match fetch(&token) {
-            Some(resp) => self.build(resp),
-            None => ProviderSnapshot::unavailable(self.id(), self.name(), "Falha ao obter quota"),
+            Ok(resp) => self.build(resp),
+            Err(Failure::Auth) => ProviderSnapshot::signed_out(
+                self.id(),
+                self.name(),
+                "Token rejeitado — atualiza-o nas definições",
+            ),
+            Err(Failure::Other) => {
+                ProviderSnapshot::unavailable(self.id(), self.name(), "Falha ao obter quota")
+            }
         }
     }
 }
@@ -87,13 +94,15 @@ impl CopilotProvider {
             local_models: Vec::new(),
             active_sessions: Vec::new(),
             stale_secs: None,
+            auth_failed: false,
         }
     }
 }
 
-fn fetch(token: &str) -> Option<UserResp> {
+fn fetch(token: &str) -> Result<UserResp, Failure> {
     let token = token.to_string();
-    super::http::with_retry(3, 1, || {
+    let rejected = std::cell::Cell::new(false);
+    let resp = super::http::with_retry(3, 1, || {
         let mut resp = agent(false)
             .get("https://api.github.com/copilot_internal/user")
             .header("Authorization", format!("Bearer {token}"))
@@ -101,8 +110,15 @@ fn fetch(token: &str) -> Option<UserResp> {
             .header("User-Agent", "ClaudTray")
             .call()
             .ok()?;
-        if resp.status().as_u16() != 200 {
-            return None;
+        match resp.status().as_u16() {
+            200 => {}
+            // Only 401 means the token is dead; GitHub also answers 403 for
+            // rate limits.
+            401 => {
+                rejected.set(true);
+                return None;
+            }
+            _ => return None,
         }
         let text = resp
             .body_mut()
@@ -111,7 +127,8 @@ fn fetch(token: &str) -> Option<UserResp> {
             .read_to_string()
             .ok()?;
         serde_json::from_str::<UserResp>(&text).ok()
-    })
+    });
+    resp.ok_or(if rejected.get() { Failure::Auth } else { Failure::Other })
 }
 
 fn resolve_token(state: &AppState) -> Option<String> {

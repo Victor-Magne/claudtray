@@ -9,6 +9,12 @@ Releases before 1.4.0 are only tagged in git and described in their
 
 ## [Unreleased]
 
+### Added
+- A "signed out" notification when Claude, Copilot or OpenRouter rejects your
+  token (HTTP 401). It fires once per provider and again only after the
+  provider has worked and then failed anew. A short-lived Claude Code CLI token
+  picked up automatically (`auto-credentials` builds) never triggers it.
+
 ### Security
 - Provider HTTP requests no longer follow redirects, so a custom secret header
   (e.g. the Antigravity CSRF token) can never be forwarded to another address.

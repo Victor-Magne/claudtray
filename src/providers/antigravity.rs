@@ -55,6 +55,7 @@ impl Provider for AntigravityProvider {
                             local_models: Vec::new(),
                             active_sessions: Vec::new(),
                             stale_secs: None,
+                            auth_failed: false,
                         };
                     }
                 }
