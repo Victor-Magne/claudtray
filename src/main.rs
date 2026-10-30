@@ -23,6 +23,7 @@ use model::{Snapshot, Status, WindowUsage};
 use monitor::QuotaMonitor;
 #[cfg(windows)]
 use renderer::generate_dynamic_icon;
+use renderer::IconState;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -92,7 +93,7 @@ async fn main() {
         (show_item, refresh_item, exit_item, show_id, refresh_id, exit_id)
     };
 
-    let initial_status = last.as_ref().map(|s| s.worst_status()).unwrap_or(Status::Healthy);
+    let initial_icon = last.as_ref().map(IconState::from_snapshot).unwrap_or_default();
     let initial_lang = Lang::from_pref(&language_pref);
     let initial_tooltip = last
         .as_ref()
@@ -109,7 +110,7 @@ async fn main() {
         .unwrap_or_else(Instant::now);
 
     #[cfg(windows)]
-    let icon = Icon::from_rgba(generate_dynamic_icon(initial_status), 64, 64)
+    let icon = Icon::from_rgba(generate_dynamic_icon(initial_icon), 64, 64)
         .expect("ícone RGBA inválido");
     // Attach the context menu to the tray and let tray-icon show it natively on
     // right-click. The library does the SetForegroundWindow + TrackPopupMenu
@@ -119,7 +120,7 @@ async fn main() {
     #[cfg(windows)]
     let mut tray: Option<TrayIcon> = Some(
         TrayIconBuilder::new()
-            .with_tooltip(initial_tooltip)
+            .with_tooltip(fit_windows_tooltip(&initial_tooltip))
             .with_icon(icon)
             .with_menu(Box::new(tray_menu))
             .with_menu_on_left_click(false)
@@ -130,7 +131,7 @@ async fn main() {
     // Linux: ksni serves the StatusNotifierItem + dbusmenu over D-Bus; clicks
     // and menu picks arrive as UserEvents through the same proxy (tray_linux.rs).
     #[cfg(target_os = "linux")]
-    let tray = tray_linux::spawn(proxy.clone(), initial_status, initial_tooltip, initial_lang).await;
+    let tray = tray_linux::spawn(proxy.clone(), initial_icon, initial_tooltip, initial_lang).await;
 
     // Forward tray + menu events into the event loop through the proxy. The
     // crate's default global channels are only drained when the loop happens to
@@ -240,7 +241,7 @@ async fn main() {
                 update_tray(&mut tray, &snap, lang);
                 #[cfg(target_os = "linux")]
                 if let Some(handle) = &tray {
-                    tray_linux::update(handle, snap.worst_status(), tooltip(&snap, lang), lang);
+                    tray_linux::update(handle, IconState::from_snapshot(&snap), tooltip(&snap, lang), lang);
                 }
                 dashboard.push(&snap);
                 last = Some(snap);
@@ -318,11 +319,8 @@ async fn main() {
                             .as_ref()
                             .map(|s| tooltip(s, lang))
                             .unwrap_or_else(|| l.tray_loading.to_string());
-                        let status = last
-                            .as_ref()
-                            .map(|s| s.worst_status())
-                            .unwrap_or(Status::Healthy);
-                        tray_linux::update(handle, status, tooltip_text, lang);
+                        let icon = last.as_ref().map(IconState::from_snapshot).unwrap_or_default();
+                        tray_linux::update(handle, icon, tooltip_text, lang);
                     }
                     spawn_set_language(&monitor, language);
                 }
@@ -484,16 +482,16 @@ fn acquire_instance_lock() -> Result<Option<std::fs::File>, ()> {
     }
 }
 
-/// Refresh the tray icon colour + tooltip from the latest snapshot.
+/// Refresh the tray icon (colour + mark) + tooltip from the latest snapshot.
 #[cfg(windows)]
 fn update_tray(tray: &mut Option<TrayIcon>, snap: &Snapshot, lang: Lang) {
     let Some(t) = tray else {
         return;
     };
-    if let Ok(icon) = Icon::from_rgba(generate_dynamic_icon(snap.worst_status()), 64, 64) {
+    if let Ok(icon) = Icon::from_rgba(generate_dynamic_icon(IconState::from_snapshot(snap)), 64, 64) {
         let _ = t.set_icon(Some(icon));
     }
-    let _ = t.set_tooltip(Some(tooltip(snap, lang)));
+    let _ = t.set_tooltip(Some(fit_windows_tooltip(&tooltip(snap, lang))));
 }
 
 /// Store the Claude OAuth token (from `claude setup-token`) and refresh so the
@@ -782,47 +780,76 @@ fn relative_until(rfc: &str, now: DateTime<Local>) -> Option<String> {
     })
 }
 
-/// Tray tooltip text: Claude keeps its familiar SESSION%/WEEKLY% line; otherwise
-/// (or when Claude has no such windows) show the single worst window across every
-/// visible provider, with its reset countdown.
+/// Tray tooltip: a "ClaudTray" header plus one row per provider, worst first (so
+/// a host that clips the tooltip drops the healthiest). A row is the provider's
+/// lowest window with its reset countdown; Claude keeps its familiar
+/// SESSION%/WEEKLY% pair. Signed-out providers get a row too, and stale data is
+/// flagged, so the tooltip explains the icon's mark.
 fn tooltip(snap: &Snapshot, lang: Lang) -> String {
     let l = catalog(lang);
+    let now = Local::now();
+    let mut rows: Vec<(u32, String)> = Vec::new();
 
-    if let Some(claude) = snap.providers.iter().find(|p| p.id == "claude" && p.available) {
-        let pct = |key: &str| {
-            claude
-                .windows
-                .iter()
-                .find(|w| w.key == key)
-                .map(|w| w.remaining_pct)
-        };
-        if let (Some(s), Some(w)) = (pct("session"), pct("weekly")) {
-            return format!(
-                "ClaudTray — {} {}% · {} {}%",
-                l.tooltip_session, s, l.tooltip_weekly, w
-            );
+    for p in &snap.providers {
+        if p.auth_failed {
+            rows.push((0, format!("{}: {}", p.name, l.tooltip_signed_out)));
+            continue;
         }
+        let Some(w) = p
+            .available
+            .then(|| p.windows.iter().min_by_key(|w| w.remaining_pct))
+            .flatten()
+        else {
+            continue;
+        };
+        let pct = |key: &str| p.windows.iter().find(|w| w.key == key).map(|w| w.remaining_pct);
+        let mut row = match (p.id.as_str(), pct("session"), pct("weekly")) {
+            ("claude", Some(s), Some(wk)) => format!(
+                "{} {} {}% · {} {}%",
+                p.name, l.tooltip_session, s, l.tooltip_weekly, wk
+            ),
+            _ => {
+                let mut r = format!("{} {} {}%", p.name, w.label, w.remaining_pct);
+                if let Some(rel) = w.reset_at.as_deref().and_then(|r| relative_until(r, now)) {
+                    r.push_str(&format!(" · {} {}", l.tooltip_reset, rel));
+                }
+                r
+            }
+        };
+        if p.stale_secs.is_some() {
+            row.push_str(&format!(" · {}", l.tooltip_stale));
+        }
+        rows.push((w.remaining_pct, row));
     }
 
-    let worst = snap
-        .providers
-        .iter()
-        .filter(|p| p.available)
-        .flat_map(|p| p.windows.iter().map(move |w| (p, w)))
-        .max_by_key(|(_, w)| w.status.rank());
-
-    let Some((p, w)) = worst else {
+    if rows.is_empty() {
         return l.tooltip_default.to_string();
-    };
-    let mut line = format!("ClaudTray — {} {} {}%", p.name, w.label, w.remaining_pct);
-    if let Some(rel) = w
-        .reset_at
-        .as_deref()
-        .and_then(|r| relative_until(r, Local::now()))
-    {
-        line.push_str(&format!(" · {} {}", l.tooltip_reset, rel));
     }
-    line
+    rows.sort_by_key(|(pct, _)| *pct); // stable: ties keep provider order
+    let body: Vec<String> = rows.into_iter().map(|(_, r)| r).collect();
+    format!("ClaudTray\n{}", body.join("\n"))
+}
+
+/// Windows' tray tooltip (`NOTIFYICONDATA.szTip`) holds 127 UTF-16 units and the
+/// tray-icon crate cuts anything longer mid-row. Drop whole trailing rows
+/// instead (rows are worst-first, so the healthiest go first).
+#[cfg(any(windows, test))]
+fn fit_windows_tooltip(text: &str) -> String {
+    const MAX_UNITS: usize = 127;
+    let mut out = String::new();
+    let mut units = 0;
+    for (i, line) in text.split('\n').enumerate() {
+        let add = line.encode_utf16().count() + usize::from(i > 0);
+        if units + add > MAX_UNITS && i > 0 {
+            break;
+        }
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(line);
+        units += add;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -957,6 +984,69 @@ mod alert_tests {
         let due = alerts_due(&signed_out_snapshot(), &AlertState::default(), Local::now());
         let (_, body) = alert_text(&due, Lang::En);
         assert!(body.contains("Claude") && body.contains("signed out"), "got: {body}");
+    }
+
+    fn provider(id: &str, name: &str, pct: u32) -> ProviderSnapshot {
+        let mut p = ProviderSnapshot::unavailable(id, name, "");
+        p.available = true;
+        p.windows = vec![WindowUsage::from_percent("weekly", "WEEKLY", pct, None)];
+        p
+    }
+
+    #[test]
+    fn tooltip_has_one_row_per_provider_worst_first() {
+        let mut snap = snapshot("a", "Alpha", Vec::new());
+        snap.providers = vec![provider("a", "Alpha", 80), provider("b", "Beta", 5)];
+        let t = tooltip(&snap, Lang::En);
+        let rows: Vec<&str> = t.lines().collect();
+        assert_eq!(rows, ["ClaudTray", "Beta WEEKLY 5%", "Alpha WEEKLY 80%"], "got: {t}");
+    }
+
+    #[test]
+    fn tooltip_row_shows_lowest_window_and_reset() {
+        let reset = (Local::now() + chrono::Duration::minutes(65)).to_rfc3339();
+        let mut snap = snapshot("a", "Alpha", Vec::new());
+        snap.providers = vec![provider("a", "Alpha", 80)];
+        snap.providers[0].windows = vec![
+            WindowUsage::from_percent("session", "SESSION", 70, None),
+            WindowUsage::from_percent("weekly", "WEEKLY", 30, Some(reset)),
+        ];
+        let t = tooltip(&snap, Lang::En);
+        assert!(t.contains("Alpha WEEKLY 30% · resets in 1h"), "got: {t}");
+        assert!(!t.contains("70%"), "got: {t}");
+    }
+
+    #[test]
+    fn tooltip_flags_signed_out_and_stale_and_skips_unavailable() {
+        let mut snap = snapshot("a", "Alpha", Vec::new());
+        let mut stale = provider("b", "Beta", 40);
+        stale.stale_secs = Some(12);
+        snap.providers = vec![
+            ProviderSnapshot::signed_out("a", "Alpha", "x"),
+            stale,
+            ProviderSnapshot::unavailable("c", "Gamma", "off"),
+        ];
+        let t = tooltip(&snap, Lang::En);
+        assert!(t.contains("Alpha: signed out"), "got: {t}");
+        assert!(t.contains("Beta WEEKLY 40% · stale"), "got: {t}");
+        assert!(!t.contains("Gamma"), "got: {t}");
+        assert!(tooltip(&snap, Lang::Pt).contains("Alpha: sessão terminada"));
+    }
+
+    #[test]
+    fn tooltip_without_data_is_the_default() {
+        let snap = snapshot("a", "Alpha", Vec::new());
+        assert_eq!(tooltip(&snap, Lang::En), catalog(Lang::En).tooltip_default);
+    }
+
+    #[test]
+    fn windows_tooltip_drops_whole_rows_over_127_units() {
+        let row = "x".repeat(35);
+        let text = format!("ClaudTray\n{row}\n{row}\n{row}\n{row}");
+        let fit = fit_windows_tooltip(&text);
+        assert_eq!(fit, format!("ClaudTray\n{row}\n{row}\n{row}"));
+        assert!(fit.encode_utf16().count() <= 127);
+        assert_eq!(fit_windows_tooltip("short"), "short");
     }
 
     #[test]
