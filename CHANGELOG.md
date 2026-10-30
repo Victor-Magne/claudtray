@@ -21,6 +21,13 @@ Releases before 1.4.0 are only tagged in git and described in their
   token (HTTP 401). It fires once per provider and again only after the
   provider has worked and then failed anew. A short-lived Claude Code CLI token
   picked up automatically (`auto-credentials` builds) never triggers it.
+- The tray icon now carries a mark in the ring's gap for states the colour
+  cannot tell: a solid disc when a provider is signed out, a bar when a
+  provider is showing stale data.
+- The tray tooltip lists one row per provider (worst first) with its lowest
+  window, remaining percentage and reset countdown, instead of only the single
+  worst window. Signed-out and stale providers are flagged in it. On Windows,
+  rows that do not fit its 127-character limit are dropped whole.
 
 ### Changed
 - Each provider now refreshes on its own minimum interval (Claude 60 s,
