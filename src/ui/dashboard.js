@@ -374,9 +374,12 @@ function ring(w) {
   return svg;
 }
 
+// Within this many points of the expected pace counts as "on pace".
+const PACE_BAND = 5;
+
 function paceText(pace) {
   if (pace == null) return null;
-  if (Math.abs(pace) <= 5) return t("paceOn");
+  if (Math.abs(pace) <= PACE_BAND) return t("paceOn");
   return pace > 0 ? t("paceUnder")(pace) : t("paceHot")(-pace);
 }
 

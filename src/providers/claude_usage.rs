@@ -17,7 +17,7 @@ use std::sync::Mutex;
 use std::time::{Instant, UNIX_EPOCH};
 
 /// Bump when `Entry`'s meaning changes so a stale on-disk cache is discarded.
-const CACHE_VERSION: u32 = 2;
+const CACHE_VERSION: u32 = 3;
 /// Don't rewrite the on-disk cache more often than this (the active transcript
 /// changes on every refresh).
 const SAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(120);
@@ -101,6 +101,15 @@ struct Usage {
     cache_creation_input_tokens: u64,
     #[serde(default)]
     cache_read_input_tokens: u64,
+    /// Split of the cache writes by TTL; 1-hour writes cost 2× input, not 1.25×.
+    #[serde(default)]
+    cache_creation: Option<CacheCreation>,
+}
+
+#[derive(Deserialize, Clone, Copy, Default)]
+struct CacheCreation {
+    #[serde(default)]
+    ephemeral_1h_input_tokens: u64,
 }
 
 /// USD per million tokens.
@@ -137,8 +146,10 @@ fn model_prices(model: &str) -> Price {
         p(0.10, 0.50, 0.01)
     } else if m.contains("haiku-4") {
         p(1.0, 5.0, 0.10)
-    } else if m.contains("haiku") {
+    } else if m.contains("haiku-3") {
         p(0.80, 4.0, 0.08)
+    } else if m.contains("haiku") {
+        p(1.0, 5.0, 0.10) // unrecognised Haiku: the current 4.5 tier
     } else {
         p(3.0, 15.0, 0.30) // unknown model: sonnet 4 tier, as before
     }
@@ -178,9 +189,11 @@ fn parse_line(line: &str, file_session: &str) -> Option<Entry> {
         return None;
     }
     let price = model_prices(&model);
+    let cache_1h = usage.cache_creation.map_or(0, |c| c.ephemeral_1h_input_tokens).min(cache_c);
     let cost = (inp as f64 * price.input
         + out as f64 * price.output
-        + cache_c as f64 * price.input * 1.25 // cache write: 1.25× input
+        + (cache_c - cache_1h) as f64 * price.input * 1.25 // 5-minute cache write
+        + cache_1h as f64 * price.input * 2.0 // 1-hour cache write
         + cache_r as f64 * price.cache_read)
         / 1_000_000.0;
 
@@ -293,15 +306,16 @@ fn file_meta(path: &Path) -> Option<(u64, u64)> {
 }
 
 /// Bring `cache` in line with the transcripts under `root`: re-parse files whose
-/// (mtime, size) changed, forget vanished ones. Returns whether anything moved.
+/// (mtime, size) changed. Returns whether anything moved. Entries of a transcript
+/// Claude Code has since deleted (it cleans up after ~30 days) are kept on
+/// purpose: that is what lets "Since" and the totals accumulate history instead
+/// of shrinking with it. Delete the cache file to start over.
 fn refresh_cache(cache: &mut Cache, root: &Path) -> bool {
     let mut changed = false;
-    let mut seen: HashSet<String> = HashSet::new();
     // Every transcript, however old — "Since" needs the whole history.
     for path in super::newest_jsonl_files(root, 36_500) {
         let Some((mtime, size)) = file_meta(&path) else { continue };
         let name = path.to_string_lossy().into_owned();
-        seen.insert(name.clone());
         let fresh = cache
             .files
             .get(&name)
@@ -312,9 +326,7 @@ fn refresh_cache(cache: &mut Cache, root: &Path) -> bool {
             changed = true;
         }
     }
-    let before = cache.files.len();
-    cache.files.retain(|k, _| seen.contains(k));
-    changed || cache.files.len() != before
+    changed
 }
 
 fn aggregate<'a>(entries: impl Iterator<Item = &'a Entry>, today: NaiveDate) -> UsageStats {
@@ -470,6 +482,41 @@ mod tests {
         assert_eq!(model_prices("claude-haiku-4-5").input, 1.0);
         assert_eq!(rd("claude-fable-5-1"), 0.25);
         assert_eq!(model_prices("something-else").input, 3.0);
+    }
+
+    #[test]
+    fn one_hour_cache_writes_cost_double_input() {
+        let line = |cc: &str| {
+            format!(
+                r#"{{"timestamp":"2026-10-30T12:00:00Z","message":{{"id":"m","model":"claude-opus-5-5","usage":{{"cache_creation_input_tokens":1000000{cc}}}}}}}"#
+            )
+        };
+        let five = parse_line(&line(""), "s").unwrap().cost;
+        let hour = parse_line(
+            &line(r#","cache_creation":{"ephemeral_1h_input_tokens":1000000}"#),
+            "s",
+        )
+        .unwrap()
+        .cost;
+        assert!((five - 5.0).abs() < 1e-9, "1M × $4 × 1.25");
+        assert!((hour - 8.0).abs() < 1e-9, "1M × $4 × 2");
+    }
+
+    #[test]
+    fn history_survives_a_deleted_transcript() {
+        let dir = std::env::temp_dir().join(format!("claudtray-keep-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s1.jsonl");
+        std::fs::write(&path, FIXTURE).unwrap();
+
+        let mut cache = Cache::default();
+        assert!(refresh_cache(&mut cache, &dir));
+        std::fs::remove_file(&path).unwrap();
+        refresh_cache(&mut cache, &dir);
+
+        let st = aggregate(cache.files.values().flat_map(|f| f.entries.iter()), friday());
+        assert_eq!(st.since.as_deref(), Some("2026-07-05"), "old records are still counted");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
