@@ -891,6 +891,7 @@ mod alert_tests {
                 stale_secs: None,
                 auth_failed: false,
                 retry_in_secs: None,
+                fetched_at: None,
             }],
             catalog: Vec::new(),
             history: Default::default(),

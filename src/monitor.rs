@@ -168,6 +168,12 @@ impl Collector {
             backoff(r.fails)
         };
         r.next = now + wait.max(server.filter(|_| !fresh.available).unwrap_or_default());
+        if fresh.available {
+            // A provider may serve a shared-cache value (Claude) it flags with
+            // `stale_secs`: the data is that old, not as old as this collect.
+            let age = chrono::Duration::seconds(fresh.stale_secs.unwrap_or(0).min(31_536_000) as i64);
+            fresh.fetched_at = Some((Local::now() - age).to_rfc3339());
+        }
         self.last_try.insert(id.to_string(), (fresh.clone(), now));
         if fresh.available {
             self.last_good.insert(id.to_string(), (fresh.clone(), now));
@@ -786,6 +792,28 @@ mod ttl_tests {
         // "fast" finishes first; "slow" still shows last round's value, in its slot.
         assert_eq!(ids(&first), ["slow", "fast"]);
         assert!(first[0].available && first[1].available);
+    }
+
+    #[test]
+    fn fetched_at_is_set_on_success_and_survives_a_failure() {
+        let (all, _, mode) = fake(60);
+        let (state, mut c, base) = (Arc::new(AppState::default()), Collector::default(), Instant::now());
+        let ok = run(&mut c, &all, &state, false, base);
+        let stamp = ok[0].fetched_at.clone().expect("set when a collect succeeds");
+        assert!(DateTime::parse_from_rfc3339(&stamp).is_ok());
+        // Ticks with nothing due show it from the cache too.
+        let cached = run(&mut c, &all, &state, false, at(base, 1));
+        assert_eq!(cached[0].fetched_at.as_ref(), Some(&stamp));
+
+        *mode.lock().unwrap() = Mode::Fail;
+        let shown = run(&mut c, &all, &state, true, at(base, 10));
+        assert_eq!((shown[0].stale_secs, shown[0].fetched_at.as_ref()), (Some(10), Some(&stamp)));
+
+        // Never succeeded: nothing to show.
+        let (all, _, mode) = fake(60);
+        *mode.lock().unwrap() = Mode::Fail;
+        let shown = run(&mut Collector::default(), &all, &state, false, base);
+        assert!(shown[0].fetched_at.is_none());
     }
 
     #[test]

@@ -57,6 +57,7 @@ impl Provider for GeminiProvider {
                 stale_secs: None,
                 auth_failed: false,
                 retry_in_secs: None,
+                fetched_at: None,
             },
             // No auth_failed here: Gemini answers a bad key with 400/403, which
             // is not unambiguous (the "signed out" alert is 401-only).

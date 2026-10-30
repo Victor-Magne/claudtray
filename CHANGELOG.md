@@ -10,6 +10,10 @@ Releases before 1.4.0 are only tagged in git and described in their
 ## [Unreleased]
 
 ### Added
+- Per-provider freshness: each provider's page and tab tooltip show "Updated 42s
+  ago" (time of its last successful collect, ticking every second), plus what is
+  going on when it is failing: "retrying in 2 min" or "signed out — sign in
+  again". New `fetched_at` field on the provider snapshot.
 - Claude page redesigned: a ring per quota window (filled with the share used,
   with a tick where the elapsed time says you should be), pace ("30% under
   pace", skipped in a window's first 3%), token consumption for today / week /
