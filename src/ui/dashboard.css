@@ -460,3 +460,140 @@ footer .spacer {
   accent-color: #4cc2ff;
   cursor: pointer;
 }
+
+/* ---- Claude usage page: rings and usage cards ---- */
+.ringcard {
+  flex-direction: row;
+  align-items: center;
+  gap: 14px;
+}
+.ring {
+  width: 68px;
+  height: 68px;
+  flex: 0 0 auto;
+}
+.ring circle {
+  fill: none;
+  stroke-width: 9;
+}
+.ring .track {
+  stroke: var(--track);
+}
+.ring .fg {
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.35s ease;
+}
+.ring .fg.s-healthy { stroke: var(--healthy); }
+.ring .fg.s-warning { stroke: var(--warning); }
+.ring .fg.s-critical { stroke: var(--critical); }
+.ring .fg.s-depleted { stroke: var(--depleted); }
+.ring .tick {
+  stroke: var(--fg);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.ring text {
+  fill: var(--fg);
+  font-size: 22px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+.rc-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.rc-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+.rc-sub {
+  font-size: 11.5px;
+  color: var(--fg-dim);
+}
+.rc-sub.used {
+  color: var(--warning);
+}
+html[data-theme="light"] .rc-sub.used {
+  color: #9a6700; /* darker amber: --warning is too pale on the light tint */
+}
+
+.tok-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  text-align: center;
+  gap: 4px;
+}
+.tok-label,
+.tok-cost {
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.tok-val {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 2px 0;
+}
+.tok-val.hot {
+  color: var(--accent);
+}
+
+.bars7 {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  height: 78px;
+}
+.bars7 .col {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 5px;
+}
+.bars7 .b {
+  width: 100%;
+  background: var(--track);
+  border-radius: 3px;
+}
+.bars7 .b.today {
+  background: var(--accent);
+}
+.bars7 .d {
+  font-size: 10px;
+  color: var(--fg-dim);
+}
+.bars7 .d.today {
+  color: var(--accent);
+}
+
+.mrow {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.mname {
+  font-size: 12px;
+}
+.mtrack {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+}
+.mtrack > span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.card.since {
+  min-height: 0;
+  font-size: 11.5px;
+  color: var(--fg-dim);
+}

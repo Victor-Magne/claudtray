@@ -1,5 +1,5 @@
 use crate::i18n::Lang;
-use crate::model::{ProviderInfo, ProviderSnapshot, Snapshot, UsagePoint};
+use crate::model::{ProviderInfo, ProviderSnapshot, Snapshot, UsagePoint, WindowUsage};
 use crate::providers::{self, Provider};
 use crate::state::AppState;
 use chrono::{DateTime, Local};
@@ -184,6 +184,7 @@ impl QuotaMonitor {
                 continue;
             }
             for w in snap.windows.iter_mut() {
+                w.pace_pct = pace(w, now);
                 let key = format!("{}:{}", snap.id, w.key);
                 w.estimated_exhaustion = estimate_exhaustion(
                     &self.state.history,
@@ -318,6 +319,20 @@ impl QuotaMonitor {
 /// signal, and never projects past the window's own `reset_at` — a window
 /// that resets before it would exhaust has no ETA to show.
 ///
+/// Pace of a window with a known length: share of it elapsed minus share used,
+/// in percentage points (positive = under pace). `None` when the length or reset
+/// is unknown, the reset already passed, or the window is under 3% elapsed.
+fn pace(w: &WindowUsage, now: DateTime<Local>) -> Option<i32> {
+    let len = w.window_secs? as f64;
+    let reset = DateTime::parse_from_rfc3339(w.reset_at.as_deref()?).ok()?;
+    let left = (reset.with_timezone(&Local) - now).num_seconds() as f64;
+    let elapsed = 1.0 - left / len;
+    if !(0.03..=1.0).contains(&elapsed) {
+        return None;
+    }
+    Some(((elapsed * 100.0) - (100 - w.remaining_pct) as f64).round() as i32)
+}
+
 /// ponytail: linear extrapolation over the recent trend, not a real usage
 /// model — good enough for "should I worry", revisit if it proves noisy.
 fn estimate_exhaustion(
@@ -375,6 +390,40 @@ fn estimate_exhaustion(
 #[cfg(test)]
 mod exhaustion_tests {
     use super::*;
+
+    fn paced(len_secs: u64, left_secs: i64, remaining: u32) -> Option<i32> {
+        let now = Local::now();
+        let mut w = WindowUsage::from_percent(
+            "weekly",
+            "WEEKLY",
+            remaining,
+            Some((now + chrono::Duration::seconds(left_secs)).to_rfc3339()),
+        );
+        w.window_secs = Some(len_secs);
+        pace(&w, now)
+    }
+
+    #[test]
+    fn pace_is_elapsed_minus_used() {
+        let week = 7 * 24 * 3600;
+        // Resets in 2d 3h 28m: ~69% elapsed, 39% used => 30 points under pace (the
+        // ClaudeBar screenshot reads "30% under pace" for these same numbers).
+        let left = 2 * 86_400 + 3 * 3600 + 28 * 60;
+        assert_eq!(paced(week, left, 61), Some(30));
+        // Burned 80% with half the week left => 30 points over (running hot).
+        assert_eq!(paced(week, week as i64 / 2, 20), Some(-30));
+    }
+
+    #[test]
+    fn pace_waits_for_the_window_to_get_going() {
+        let five_h = 5 * 3600;
+        // 2 minutes into a 5-hour window (<3%): no pace, whatever the usage.
+        assert_eq!(paced(five_h, five_h as i64 - 120, 90), None);
+        // No window length, or a reset already in the past: no pace either.
+        let w = WindowUsage::from_percent("m", "M", 50, None);
+        assert_eq!(pace(&w, Local::now()), None);
+        assert_eq!(paced(five_h, -60, 50), None);
+    }
 
     fn point(minutes_ago: i64, key: &str, pct: u32, now: DateTime<Local>) -> UsagePoint {
         let mut values = HashMap::new();

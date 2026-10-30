@@ -131,15 +131,16 @@ impl ClaudeProvider {
             return ProviderSnapshot::unavailable(self.id(), self.name(), "Sem dados de uso");
         }
 
-        let (total_tokens, estimated_cost_usd) = count_tokens_from_logs();
+        let usage = super::claude_usage::collect();
         ProviderSnapshot {
             id: self.id().to_string(),
             name: self.name().to_string(),
             available: true,
             note: None,
             windows,
-            total_tokens: Some(total_tokens),
-            estimated_cost_usd: Some(estimated_cost_usd),
+            total_tokens: usage.as_ref().map(|u| u.month.tokens),
+            estimated_cost_usd: usage.as_ref().map(|u| u.month.cost),
+            usage,
             local_models: Vec::new(),
             active_sessions: detect_ide_sessions(),
             stale_secs: None,
@@ -148,20 +149,13 @@ impl ClaudeProvider {
     }
 }
 
-/// Approximate input/output price per million tokens (USD) by model family.
-fn model_prices(model: &str) -> (f64, f64) {
-    let m = model.to_ascii_lowercase();
-    if m.contains("opus")   { (15.0, 75.0) }
-    else if m.contains("sonnet") { (3.0, 15.0) }
-    else if m.contains("haiku")  { (0.80, 4.0) }
-    else                         { (3.0, 15.0) }  // default: sonnet tier
-}
-
 fn window(key: &str, label: &str, q: Quota) -> WindowUsage {
     let used = q.utilization.unwrap_or(0.0).clamp(0.0, 100.0);
     let remaining = (100.0 - used).round().clamp(0.0, 100.0) as u32;
     let reset = q.resets_at.as_ref().and_then(parse_reset);
-    WindowUsage::from_percent(key, label, remaining, reset)
+    let mut w = WindowUsage::from_percent(key, label, remaining, reset);
+    w.window_secs = Some(if key == "session" { 5 * 3600 } else { 7 * 24 * 3600 });
+    w
 }
 
 fn parse_reset(v: &serde_json::Value) -> Option<String> {
@@ -228,63 +222,6 @@ fn load_token_from_claude_code() -> Option<String> {
     let content = std::fs::read_to_string(path).ok()?;
     let creds: Credentials = serde_json::from_str(&content).ok()?;
     creds.oauth?.access_token.filter(|t| !t.trim().is_empty())
-}
-
-/// Sum tokens and estimate cost from Claude Code JSONL logs (last 30 days, up to 300 files).
-pub fn count_tokens_from_logs() -> (u64, f64) {
-    let Some(projects_dir) = dirs::home_dir().map(|h| h.join(".claude").join("projects")) else {
-        return (0, 0.0);
-    };
-    if !projects_dir.exists() {
-        return (0, 0.0);
-    }
-    let files = super::newest_jsonl_files(&projects_dir, 30);
-    let mut total_tokens = 0u64;
-    let mut total_cost = 0.0f64;
-    for path in files.iter().take(300) {
-        let (t, c) = count_file_tokens(path);
-        total_tokens += t;
-        total_cost += c;
-    }
-    (total_tokens, total_cost)
-}
-
-fn count_file_tokens(path: &std::path::Path) -> (u64, f64) {
-    let Ok(content) = std::fs::read_to_string(path) else { return (0, 0.0); };
-    if content.len() > 10_000_000 { return (0, 0.0); }
-    let mut total_tok = 0u64;
-    let mut total_cost = 0.0f64;
-    for line in content.lines() {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue; };
-        if let Some((tok, cost)) = extract_usage(&v) {
-            total_tok += tok;
-            total_cost += cost;
-        }
-    }
-    (total_tok, total_cost)
-}
-
-fn extract_usage(v: &serde_json::Value) -> Option<(u64, f64)> {
-    let model = v.get("model")
-        .or_else(|| v.get("message").and_then(|m| m.get("model")))
-        .and_then(|m| m.as_str())
-        .unwrap_or("claude-sonnet");
-    let (price_in, price_out) = model_prices(model);
-
-    let usage = v.get("usage")
-        .or_else(|| v.get("message").and_then(|m| m.get("usage")))?;
-    let inp     = usage.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-    let out     = usage.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-    let cache_c = usage.get("cache_creation_input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-    let cache_r = usage.get("cache_read_input_tokens").and_then(|t| t.as_u64()).unwrap_or(0);
-
-    let tokens = inp + out + cache_c + cache_r;
-    let cost = (inp as f64 * price_in
-        + out as f64 * price_out
-        + cache_c as f64 * price_in * 1.25   // cache write: 1.25× input
-        + cache_r as f64 * price_in * 0.10)  // cache read:  0.10× input
-        / 1_000_000.0;
-    Some((tokens, cost))
 }
 
 /// Scan `~/.claude/ide/*.lock` files for active Claude Code IDE sessions.
@@ -475,25 +412,5 @@ mod tests {
         assert!(parse_reset(&serde_json::json!("2026-01-15T18:00:00Z")).is_some());
         assert!(parse_reset(&serde_json::json!(1_768_500_000_i64)).is_some());
         assert!(parse_reset(&serde_json::json!("not-a-date")).is_none());
-    }
-
-    #[test]
-    fn extract_usage_sums_all_token_buckets() {
-        let lines = include_str!("../../tests/fixtures/claude/log_lines.jsonl");
-        let mut tokens = 0u64;
-        let mut cost = 0.0f64;
-        for line in lines.lines() {
-            let v: serde_json::Value = match serde_json::from_str(line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if let Some((t, c)) = extract_usage(&v) {
-                tokens += t;
-                cost += c;
-            }
-        }
-        // line 1: 1000 + 500 + 200 + 4000 ; line 3: 10 + 20
-        assert_eq!(tokens, 5730);
-        assert!(cost > 0.0);
     }
 }

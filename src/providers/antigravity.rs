@@ -56,6 +56,7 @@ impl Provider for AntigravityProvider {
                             windows,
                             total_tokens: None,
                             estimated_cost_usd: None,
+                            usage: None,
                             local_models: Vec::new(),
                             active_sessions: Vec::new(),
                             stale_secs: None,

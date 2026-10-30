@@ -59,6 +59,21 @@ const STRINGS = {
     updatedPrefix: "Atualizado ",
     staleNote: "Sem resposta do provider —",
     agoSuffix: (n, unit) => `há ${n}${unit}`,
+    win5h: "Janela de 5h",
+    win7d: "Uso de 7 dias",
+    usedSuffix: "usado",
+    paceOn: "No ritmo",
+    paceUnder: (n) => `${n}% abaixo do ritmo`,
+    paceHot: (n) => `A gastar depressa (+${n}%)`,
+    sessionsMsgs: (s, m) => `${s} sessões · ${m} msgs`,
+    tokenConsumption: "Consumo de tokens",
+    today: "Hoje",
+    week: "Semana",
+    month: "Mês",
+    dailyActivity: "Atividade diária",
+    modelsWeek: "Modelos esta semana",
+    sinceLine: (d, s, m) => `Desde ${d} · ${s} sessões · ${m} msgs`,
+    weekdays: ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"],
   },
   en: {
     headerSub: "AI Usage Monitor",
@@ -103,6 +118,21 @@ const STRINGS = {
     updatedPrefix: "Updated ",
     staleNote: "No response from provider —",
     agoSuffix: (n, unit) => `${n}${unit} ago`,
+    win5h: "5h Rate Window",
+    win7d: "7-Day Usage",
+    usedSuffix: "used",
+    paceOn: "On pace",
+    paceUnder: (n) => `${n}% under pace`,
+    paceHot: (n) => `Running hot (+${n}%)`,
+    sessionsMsgs: (s, m) => `${s} sessions · ${m} msgs`,
+    tokenConsumption: "Token Consumption",
+    today: "Today",
+    week: "Week",
+    month: "Month",
+    dailyActivity: "Daily Activity",
+    modelsWeek: "Models This Week",
+    sinceLine: (d, s, m) => `Since ${d} · ${s} sessions · ${m} msgs`,
+    weekdays: ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
   },
 };
 
@@ -275,7 +305,10 @@ function renderCards() {
     wrap.appendChild(stale);
   }
 
-  if (hasWindows) {
+  if (hasWindows && p.usage) {
+    // Claude: rings + the usage cards built from the local transcripts.
+    renderUsagePage(wrap, p);
+  } else if (hasWindows) {
     p.windows.forEach((w) => {
       const wide = w.key === "opus" || p.windows.length === 1;
       wrap.appendChild(card(w, wide));
@@ -286,12 +319,157 @@ function renderCards() {
     p.active_sessions.forEach((s) => wrap.appendChild(sessionCard(s)));
   }
 
-  if (p.total_tokens != null && p.total_tokens > 0) {
+  if (!p.usage && p.total_tokens != null && p.total_tokens > 0) {
     wrap.appendChild(totalTokensCard(p));
   }
 
   if (hasModels) {
     p.local_models.forEach((m) => wrap.appendChild(localModelCard(m)));
+  }
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+function svgEl(name, attrs) {
+  const el = document.createElementNS(SVG_NS, name);
+  for (const k in attrs) el.setAttribute(k, attrs[k]);
+  return el;
+}
+
+function div(cls, text) {
+  const el = document.createElement("div");
+  if (cls) el.className = cls;
+  if (text != null) el.textContent = text;
+  return el;
+}
+
+// A ring that fills with the share USED, in the window's status colour, with a
+// tick where the elapsed time says it should be (the pace).
+function ring(w) {
+  const used = 100 - w.remaining_pct;
+  const R = 42;
+  const C = 2 * Math.PI * R;
+  const svg = svgEl("svg", { viewBox: "0 0 100 100", class: "ring" });
+  svg.appendChild(svgEl("circle", { class: "track", cx: 50, cy: 50, r: R }));
+  svg.appendChild(
+    svgEl("circle", {
+      class: "fg s-" + w.status,
+      cx: 50,
+      cy: 50,
+      r: R,
+      "stroke-dasharray": `${(C * used) / 100} ${C}`,
+      transform: "rotate(-90 50 50)",
+    })
+  );
+  if (w.pace_pct != null) {
+    const a = ((Math.min(100, Math.max(0, used + w.pace_pct)) * 3.6) * Math.PI) / 180;
+    const pt = (r) => [50 + r * Math.sin(a), 50 - r * Math.cos(a)];
+    const [x1, y1] = pt(R - 9);
+    const [x2, y2] = pt(R + 9);
+    svg.appendChild(svgEl("line", { class: "tick", x1, y1, x2, y2 }));
+  }
+  const label = svgEl("text", { x: 50, y: 52 });
+  label.textContent = used + "%";
+  svg.appendChild(label);
+  return svg;
+}
+
+// Within this many points of the expected pace counts as "on pace".
+const PACE_BAND = 5;
+
+function paceText(pace) {
+  if (pace == null) return null;
+  if (Math.abs(pace) <= PACE_BAND) return t("paceOn");
+  return pace > 0 ? t("paceUnder")(pace) : t("paceHot")(-pace);
+}
+
+function ringCard(w, p) {
+  const el = div("card wide ringcard");
+  el.appendChild(ring(w));
+  const text = div("rc-text");
+  const five = w.window_secs && w.window_secs <= 6 * 3600;
+  // w.label comes from the provider: textContent only.
+  const title = w.key === "session" ? t("win5h") : w.key === "weekly" ? t("win7d") : w.label;
+  text.appendChild(div("rc-title", five ? title : `${title} · ${100 - w.remaining_pct}%`));
+  if (five) text.appendChild(div("rc-sub used", `${100 - w.remaining_pct}% ${t("usedSuffix")}`));
+  const pace = paceText(w.pace_pct);
+  if (pace) text.appendChild(div("rc-sub", pace));
+  if (w.key === "weekly" && p.usage) {
+    const u = p.usage;
+    text.appendChild(div("rc-sub", t("sessionsMsgs")(u.sessions_7d, u.msgs_7d.toLocaleString())));
+  }
+  const reset = div("rc-sub reset");
+  reset.dataset.resetAt = w.reset_at || "";
+  reset.textContent = resetText(w.reset_at);
+  text.appendChild(reset);
+  if (w.estimated_exhaustion) {
+    const ex = div("rc-sub exhaustion", exhaustionText(w.estimated_exhaustion));
+    ex.dataset.exhaustionAt = w.estimated_exhaustion;
+    text.appendChild(ex);
+  }
+  el.appendChild(text);
+  return el;
+}
+
+function usageCard(title) {
+  const el = div("card wide");
+  el.appendChild(div("rc-title", title));
+  return el;
+}
+
+function renderUsagePage(wrap, p) {
+  const u = p.usage;
+  p.windows.forEach((w) => wrap.appendChild(ringCard(w, p)));
+
+  // Token consumption: today / week / month with the estimated cost.
+  const tok = usageCard(t("tokenConsumption"));
+  const grid = div("tok-grid");
+  [["today", u.today], ["week", u.week], ["month", u.month]].forEach(([k, v], i) => {
+    const col = div("tok-col");
+    col.appendChild(div("tok-label", t(k)));
+    col.appendChild(div("tok-val" + (i === 0 ? " hot" : ""), formatTokens(v.tokens)));
+    col.appendChild(div("tok-cost", "$" + v.cost.toFixed(v.cost < 100 ? 2 : 0)));
+    grid.appendChild(col);
+  });
+  tok.appendChild(grid);
+  wrap.appendChild(tok);
+
+  // Daily activity: one bar per weekday, today highlighted.
+  const act = usageCard(t("dailyActivity"));
+  const bars = div("bars7");
+  const max = Math.max(1, ...u.daily);
+  u.daily.forEach((v, i) => {
+    const col = div("col");
+    const bar = div("b" + (i === u.today_index ? " today" : ""));
+    bar.style.height = Math.max(3, Math.round((v / max) * 100)) + "%";
+    col.appendChild(bar);
+    col.appendChild(div("d" + (i === u.today_index ? " today" : ""), t("weekdays")[i]));
+    bars.appendChild(col);
+  });
+  act.appendChild(bars);
+  wrap.appendChild(act);
+
+  // Models this week: tokens per family, bars scaled to the largest.
+  if (u.models_week.length) {
+    const mod = usageCard(t("modelsWeek"));
+    const top = u.models_week[0].tokens || 1;
+    u.models_week.forEach((m) => {
+      const row = div("mrow");
+      row.appendChild(div("mname", `${m.model} ${formatTokens(m.tokens)}`));
+      const track = div("mtrack");
+      const fill = document.createElement("span");
+      fill.style.width = Math.round((m.tokens / top) * 100) + "%";
+      track.appendChild(fill);
+      row.appendChild(track);
+      mod.appendChild(row);
+    });
+    wrap.appendChild(mod);
+  }
+
+  if (u.since) {
+    wrap.appendChild(
+      div("card wide since", t("sinceLine")(u.since, u.sessions_total, u.msgs_total.toLocaleString()))
+    );
   }
 }
 
@@ -498,7 +676,12 @@ function resetText(iso) {
   const mins = Math.floor(diff / 60000);
   const h = Math.floor(mins / 60);
   const m = mins % 60;
-  const rel = h > 0 ? h + "h " + m + "m" : m + "m";
+  const rel =
+    h >= 24
+      ? Math.floor(h / 24) + "d " + (h % 24) + "h " + m + "m"
+      : h > 0
+        ? h + "h " + m + "m"
+        : m + "m";
   return t("resetsIn") + " " + rel + " · " + time;
 }
 
