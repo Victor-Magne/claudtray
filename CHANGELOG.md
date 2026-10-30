@@ -27,7 +27,14 @@ Releases before 1.4.0 are only tagged in git and described in their
   files.
 - Estimated cost uses current per-model prices (Opus 5.5, Sonnet 5, Haiku 5.5,
   Fable…) with each model's own cache-read price, instead of one old tier per
-  family. It stays an estimate.
+  family, and 1-hour cache writes at 2×. It stays an estimate.
+- "Since" and the totals keep accumulating after Claude Code deletes old
+  transcripts (the cache no longer forgets them); deleting
+  `~/.cache/ClaudTray/claude_usage.json` starts over.
+
+### Security
+- Provider HTTP requests no longer follow redirects, so a custom secret header
+  (e.g. the Antigravity CSRF token) can never be forwarded to another address.
 
 ## [1.4.0] - 2026-08-31
 
