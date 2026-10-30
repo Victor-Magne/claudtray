@@ -58,9 +58,16 @@ impl Provider for ClaudeProvider {
         let lang = Lang::from_pref(&state.language);
 
         let now = now_secs();
-        let shared = shared_cache_paths().and_then(|(file, identity)| {
-            shared_usage(&std::fs::read(file).ok()?, &identity, now)
-        });
+        // The shared cache belongs to the account in `~/.claude/.credentials.json`.
+        // A token the user pasted (Settings / env var) may be another account, so
+        // then the file must not be trusted; it also keeps public builds, which
+        // never fall back to that credentials file, from reading it at all.
+        let shared = if explicit_token(state).is_none() {
+            shared_cache_paths()
+                .and_then(|(file, identity)| shared_usage(&std::fs::read(file).ok()?, &identity, now))
+        } else {
+            None
+        };
         let own = own_cache_path();
 
         let result = usage_with_fallback(shared, own.as_deref().and_then(load_own), now, || {
