@@ -37,6 +37,10 @@ impl Provider for ClaudeProvider {
         "claude"
     }
 
+    fn min_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(60)
+    }
+
     fn name(&self) -> &'static str {
         "Claude"
     }

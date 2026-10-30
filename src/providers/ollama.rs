@@ -43,6 +43,10 @@ impl Provider for OllamaProvider {
         "ollama"
     }
 
+    fn min_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(4) // localhost; just under the 5 s tick
+    }
+
     fn name(&self) -> &'static str {
         "Ollama"
     }

@@ -26,6 +26,10 @@ impl Provider for OpenRouterProvider {
         "openrouter"
     }
 
+    fn min_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(300)
+    }
+
     fn name(&self) -> &'static str {
         "OpenRouter"
     }

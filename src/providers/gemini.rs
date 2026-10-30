@@ -25,6 +25,10 @@ impl Provider for GeminiProvider {
         "gemini"
     }
 
+    fn min_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(600)
+    }
+
     fn name(&self) -> &'static str {
         "Gemini"
     }

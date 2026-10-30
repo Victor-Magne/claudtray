@@ -21,6 +21,10 @@ impl Provider for AntigravityProvider {
         "antigravity"
     }
 
+    fn min_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(4) // local; just under the 5 s tick so jitter never skips one
+    }
+
     fn name(&self) -> &'static str {
         "Antigravity"
     }

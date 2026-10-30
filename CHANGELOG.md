@@ -15,6 +15,14 @@ Releases before 1.4.0 are only tagged in git and described in their
   provider has worked and then failed anew. A short-lived Claude Code CLI token
   picked up automatically (`auto-credentials` builds) never triggers it.
 
+### Changed
+- Each provider now refreshes on its own minimum interval (Claude 60 s,
+  Copilot and OpenRouter 5 min, Gemini 10 min; local Codex, Antigravity and
+  Ollama every tick) instead of every provider on every 5 s tick, which caused
+  429s and timeouts while the popover was open. Skipped providers reuse their
+  last snapshot without being marked stale; the manual refresh and saving a new
+  credential still refresh everything at once.
+
 ### Security
 - Provider HTTP requests no longer follow redirects, so a custom secret header
   (e.g. the Antigravity CSRF token) can never be forwarded to another address.
