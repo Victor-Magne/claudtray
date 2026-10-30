@@ -15,6 +15,12 @@ Releases before 1.4.0 are only tagged in git and described in their
   provider has worked and then failed anew. A short-lived Claude Code CLI token
   picked up automatically (`auto-credentials` builds) never triggers it.
 
+### Fixed
+- The popover now closes when the pointer leaves it and stays out for about
+  0.4 s (coming back in time cancels it). It does not close while Settings is
+  open or a mouse button is held. Before, on Wayland layer-shell the popover
+  stayed open after the pointer left it because keyboard focus never changed.
+
 ### Security
 - Provider HTTP requests no longer follow redirects, so a custom secret header
   (e.g. the Antigravity CSRF token) can never be forwarded to another address.
