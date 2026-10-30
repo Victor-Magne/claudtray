@@ -93,6 +93,7 @@ impl Provider for OllamaProvider {
             active_sessions: Vec::new(),
             stale_secs: None,
             auth_failed: false,
+            retry_in_secs: None,
         }
     }
 }

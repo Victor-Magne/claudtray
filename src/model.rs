@@ -159,9 +159,21 @@ pub struct ProviderSnapshot {
     /// is normal, not an alert).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auth_failed: bool,
+    /// Two-way field. A failing provider sets it to the server's `Retry-After`
+    /// (seconds); the monitor consumes it and refills it, on whatever it shows
+    /// for a failed provider, with the time left until the next attempt, so the
+    /// UI can say "retrying in…". `None` when the provider is not backing off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_in_secs: Option<u64>,
 }
 
 impl ProviderSnapshot {
+    /// Report the server's `Retry-After` (seconds) with a failed snapshot.
+    pub fn retry_in(mut self, secs: Option<u64>) -> Self {
+        self.retry_in_secs = secs;
+        self
+    }
+
     /// An unavailable snapshot whose cause is a rejected token.
     pub fn signed_out(id: &str, name: &str, note: &str) -> Self {
         Self {
@@ -184,6 +196,7 @@ impl ProviderSnapshot {
             active_sessions: Vec::new(),
             stale_secs: None,
             auth_failed: false,
+            retry_in_secs: None,
         }
     }
 }

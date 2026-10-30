@@ -19,10 +19,34 @@ const STALE_TTL: Duration = Duration::from_secs(300);
 /// throttled, so a restart is at most this stale.
 const SAVE_INTERVAL: Duration = Duration::from_secs(30);
 
-/// After a failed collection, retry sooner than a long `min_interval` (e.g.
-/// Gemini's 10 min) would allow, so a transient blip doesn't hide the provider
-/// for that long. Still far gentler than the 5 s tick.
+/// First retry after a failed collection, sooner than a long `min_interval`
+/// (e.g. Gemini's 10 min) would allow, so a transient blip doesn't hide the
+/// provider for that long. Each further consecutive failure doubles it
+/// (30 s, 1, 2, 4, 8 min) up to `MAX_BACKOFF`; a success resets it. Providers
+/// whose `min_interval` is below it are local and not backed off.
 const FAIL_RETRY: Duration = Duration::from_secs(30);
+
+/// Ceiling of the failure backoff.
+const MAX_BACKOFF: Duration = Duration::from_secs(600);
+
+/// Ceiling of a server-provided `Retry-After`, so a bogus value cannot park a
+/// provider for days.
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(3600);
+
+/// Wait after the `fails`-th consecutive failure: `FAIL_RETRY * 2^(fails-1)`.
+fn backoff(fails: u32) -> Duration {
+    FAIL_RETRY
+        .saturating_mul(2u32.saturating_pow(fails.saturating_sub(1).min(16)))
+        .min(MAX_BACKOFF)
+}
+
+/// Per-provider retry schedule.
+struct Retry {
+    /// Consecutive failed collections (auth failures excluded); 0 after a success.
+    fails: u32,
+    /// Earliest moment the provider may be collected again (unless forced).
+    next: Instant,
+}
 
 /// How long one tick waits for a provider. Past it the provider is treated as
 /// failed for this tick (its last good value stays, marked stale) and the UI
@@ -48,6 +72,8 @@ struct Collector {
     /// A new one is never started meanwhile, so a hung provider cannot pile up
     /// threads.
     running: HashMap<String, Arc<AtomicBool>>,
+    /// When each provider may next be collected, and how many failures in a row.
+    retry: HashMap<String, Retry>,
     /// Shown for a provider that has no result yet (last run's snapshot at startup).
     seed: HashMap<String, ProviderSnapshot>,
     deadline: Duration,
@@ -59,6 +85,7 @@ impl Default for Collector {
             last_try: HashMap::new(),
             last_good: HashMap::new(),
             running: HashMap::new(),
+            retry: HashMap::new(),
             seed: HashMap::new(),
             deadline: PROVIDER_DEADLINE,
         }
@@ -66,26 +93,27 @@ impl Default for Collector {
 }
 
 impl Collector {
-    /// A provider is due when it was never collected, or its last attempt is
-    /// older than `min_interval` (`FAIL_RETRY` at most if that attempt failed).
-    fn is_due(&self, id: &str, interval: Duration, now: Instant) -> bool {
-        match self.last_try.get(id) {
-            None => true,
-            Some((snap, at)) => {
-                let wait = if snap.available { interval } else { interval.min(FAIL_RETRY) };
-                now.saturating_duration_since(*at) >= wait
-            }
-        }
+    /// A provider is due when it was never collected, or its schedule (set by
+    /// `settle`) has come up.
+    fn is_due(&self, id: &str, now: Instant) -> bool {
+        self.retry.get(id).is_none_or(|r| now >= r.next)
     }
 
     /// What to display for `id` given its latest raw result `fresh`. A provider
     /// that failed keeps showing its last good value for STALE_TTL so fast
     /// polling doesn't flicker.
-    fn resolve(&self, id: &str, fresh: ProviderSnapshot, now: Instant) -> ProviderSnapshot {
+    fn resolve(&self, id: &str, mut fresh: ProviderSnapshot, now: Instant) -> ProviderSnapshot {
+        // Whatever the provider (or a persisted seed) said, the monitor owns this.
+        fresh.retry_in_secs = None;
         if fresh.available {
             return fresh;
         }
-        match self.last_good.get(id) {
+        let retry_in = self
+            .retry
+            .get(id)
+            .and_then(|r| r.next.checked_duration_since(now))
+            .map(|d| d.as_secs());
+        let mut shown = match self.last_good.get(id) {
             // A rejected token is not a blip: never mask it with old numbers.
             Some((good, ts))
                 if !fresh.auth_failed && now.saturating_duration_since(*ts) < STALE_TTL =>
@@ -95,7 +123,9 @@ impl Collector {
                 good
             }
             _ => fresh,
-        }
+        };
+        shown.retry_in_secs = retry_in;
+        shown
     }
 
     /// Display value from the cache alone (no collection in flight for it).
@@ -110,8 +140,34 @@ impl Collector {
         self.resolve(id, fresh, now)
     }
 
-    /// Record a collection result and return what to display for it.
-    fn settle(&mut self, id: &str, fresh: ProviderSnapshot, now: Instant) -> ProviderSnapshot {
+    /// Record a collection result, schedule the provider's next attempt and
+    /// return what to display for it. After a failure the wait is the failure
+    /// backoff, or the server's `Retry-After` (capped) when that is longer; a
+    /// rejected token waits the normal `interval` (it is not a blip, but the
+    /// endpoint must not be hit more often than usual); a local provider
+    /// (`interval` under `FAIL_RETRY`) is simply retried at its `interval`.
+    fn settle(
+        &mut self,
+        id: &str,
+        interval: Duration,
+        mut fresh: ProviderSnapshot,
+        now: Instant,
+    ) -> ProviderSnapshot {
+        let server = fresh.retry_in_secs.take().map(|s| Duration::from_secs(s).min(MAX_RETRY_AFTER));
+        let r = self
+            .retry
+            .entry(id.to_string())
+            .or_insert(Retry { fails: 0, next: now });
+        let wait = if fresh.available {
+            r.fails = 0;
+            interval
+        } else if fresh.auth_failed || interval < FAIL_RETRY {
+            interval
+        } else {
+            r.fails += 1;
+            backoff(r.fails)
+        };
+        r.next = now + wait.max(server.filter(|_| !fresh.available).unwrap_or_default());
         self.last_try.insert(id.to_string(), (fresh.clone(), now));
         if fresh.available {
             self.last_good.insert(id.to_string(), (fresh.clone(), now));
@@ -146,7 +202,7 @@ impl Collector {
         let (tx, rx) = mpsc::channel();
         let mut waiting = vec![false; enabled.len()];
         for (i, p) in enabled.iter().enumerate() {
-            let due = force || self.is_due(p.id(), p.min_interval(), now);
+            let due = force || self.is_due(p.id(), now);
             let busy = self.running.entry(p.id().to_string()).or_default();
             if !due || busy.swap(true, Ordering::SeqCst) {
                 continue;
@@ -171,7 +227,7 @@ impl Collector {
         while left > 0 {
             match rx.recv_timeout(end.saturating_duration_since(Instant::now())) {
                 Ok((i, snap)) => {
-                    shown[i] = self.settle(enabled[i].id(), snap, now);
+                    shown[i] = self.settle(enabled[i].id(), enabled[i].min_interval(), snap, now);
                     waiting[i] = false;
                     left -= 1;
                 }
@@ -183,7 +239,7 @@ impl Collector {
                     };
                     for (i, p) in enabled.iter().enumerate().filter(|(i, _)| waiting[*i]) {
                         let failed = ProviderSnapshot::unavailable(p.id(), p.name(), why);
-                        shown[i] = self.settle(p.id(), failed, now);
+                        shown[i] = self.settle(p.id(), p.min_interval(), failed, now);
                     }
                     left = 0;
                 }
@@ -580,6 +636,8 @@ mod ttl_tests {
         Ok,
         Fail,
         Auth,
+        /// Fails with a server `Retry-After` of this many seconds.
+        Throttle(u64),
     }
 
     struct Fake {
@@ -609,6 +667,9 @@ mod ttl_tests {
                 }
                 Mode::Fail => ProviderSnapshot::unavailable("fake", "Fake", "down"),
                 Mode::Auth => ProviderSnapshot::signed_out("fake", "Fake", "401"),
+                Mode::Throttle(s) => {
+                    ProviderSnapshot::unavailable("fake", "Fake", "429").retry_in(Some(s))
+                }
             }
         }
     }
@@ -843,5 +904,130 @@ mod ttl_tests {
         // Still flagged on the ticks that reuse the cached 401.
         let snaps = run(&mut c, &all, &state, false, at(base, 65));
         assert!(!snaps[0].available && snaps[0].auth_failed);
+    }
+
+    /// Calls made so far, after a round at `secs` past `base`.
+    fn calls_at(
+        c: &mut Collector,
+        rig: &Rig,
+        base: Instant,
+        secs: u64,
+        force: bool,
+    ) -> (usize, ProviderSnapshot) {
+        let snaps = run(c, &rig.0, &Arc::new(AppState::default()), force, at(base, secs));
+        (rig.1.load(Ordering::SeqCst), snaps[0].clone())
+    }
+
+    #[test]
+    fn consecutive_failures_back_off_30_60_120_and_expose_the_wait() {
+        let rig = fake(60);
+        *rig.2.lock().unwrap() = Mode::Fail;
+        let (mut c, base) = (Collector::default(), Instant::now());
+        assert_eq!(calls_at(&mut c, &rig, base, 0, false).0, 1);
+        // 1st failure: next attempt at +30 s.
+        let (n, s) = calls_at(&mut c, &rig, base, 10, false);
+        assert_eq!((n, s.retry_in_secs), (1, Some(20)));
+        assert_eq!(calls_at(&mut c, &rig, base, 29, false).0, 1);
+        assert_eq!(calls_at(&mut c, &rig, base, 30, false).0, 2);
+        // 2nd: +60 s (t=90).
+        assert_eq!(calls_at(&mut c, &rig, base, 89, false).0, 2);
+        assert_eq!(calls_at(&mut c, &rig, base, 90, false).0, 3);
+        // 3rd: +120 s (t=210).
+        assert_eq!(calls_at(&mut c, &rig, base, 209, false).0, 3);
+        assert_eq!(calls_at(&mut c, &rig, base, 210, false).0, 4);
+    }
+
+    #[test]
+    fn backoff_doubles_up_to_ten_minutes() {
+        let secs: Vec<u64> = (1..=8).map(|n| backoff(n).as_secs()).collect();
+        assert_eq!(secs, [30, 60, 120, 240, 480, 600, 600, 600]);
+        assert_eq!(backoff(u32::MAX).as_secs(), 600);
+    }
+
+    #[test]
+    fn a_success_resets_the_backoff() {
+        let rig = fake(60);
+        *rig.2.lock().unwrap() = Mode::Fail;
+        let (mut c, base) = (Collector::default(), Instant::now());
+        calls_at(&mut c, &rig, base, 0, false); // fail, +30
+        calls_at(&mut c, &rig, base, 30, false); // fail, +60
+        *rig.2.lock().unwrap() = Mode::Ok;
+        let (n, s) = calls_at(&mut c, &rig, base, 90, false);
+        assert_eq!(n, 3);
+        assert!(s.available && s.retry_in_secs.is_none());
+        // Back to the normal 60 s interval...
+        assert_eq!(calls_at(&mut c, &rig, base, 149, false).0, 3);
+        assert_eq!(calls_at(&mut c, &rig, base, 150, false).0, 4);
+        // ...and the next failure starts again at 30 s, not 120 s.
+        *rig.2.lock().unwrap() = Mode::Fail;
+        calls_at(&mut c, &rig, base, 210, false);
+        assert_eq!(calls_at(&mut c, &rig, base, 239, false).0, 5);
+        assert_eq!(calls_at(&mut c, &rig, base, 240, false).0, 6);
+    }
+
+    #[test]
+    fn a_longer_retry_after_wins_a_shorter_one_does_not() {
+        let rig = fake(60);
+        let (mut c, base) = (Collector::default(), Instant::now());
+        *rig.2.lock().unwrap() = Mode::Throttle(300);
+        let (_, s) = calls_at(&mut c, &rig, base, 0, false);
+        assert_eq!(s.retry_in_secs, Some(300), "shown to the UI as the time left");
+        assert_eq!(calls_at(&mut c, &rig, base, 299, false).0, 1);
+        // At t=300 it throttles with 10 s: the 2nd-failure backoff (60 s) is longer.
+        *rig.2.lock().unwrap() = Mode::Throttle(10);
+        assert_eq!(calls_at(&mut c, &rig, base, 300, false).0, 2);
+        assert_eq!(calls_at(&mut c, &rig, base, 359, false).0, 2);
+        assert_eq!(calls_at(&mut c, &rig, base, 360, false).0, 3);
+    }
+
+    #[test]
+    fn retry_after_is_capped_at_one_hour() {
+        let rig = fake(60);
+        let (mut c, base) = (Collector::default(), Instant::now());
+        *rig.2.lock().unwrap() = Mode::Throttle(1_000_000);
+        let (_, s) = calls_at(&mut c, &rig, base, 0, false);
+        assert_eq!(s.retry_in_secs, Some(3600));
+        assert_eq!(calls_at(&mut c, &rig, base, 3599, false).0, 1);
+        assert_eq!(calls_at(&mut c, &rig, base, 3600, false).0, 2);
+    }
+
+    #[test]
+    fn force_bypasses_the_backoff() {
+        let rig = fake(60);
+        *rig.2.lock().unwrap() = Mode::Throttle(600);
+        let (mut c, base) = (Collector::default(), Instant::now());
+        calls_at(&mut c, &rig, base, 0, false);
+        assert_eq!(calls_at(&mut c, &rig, base, 5, false).0, 1);
+        *rig.2.lock().unwrap() = Mode::Ok;
+        let (n, s) = calls_at(&mut c, &rig, base, 6, true);
+        assert_eq!(n, 2);
+        assert!(s.available && s.retry_in_secs.is_none());
+    }
+
+    #[test]
+    fn auth_failure_waits_the_normal_interval_and_is_never_masked() {
+        let rig = fake(300);
+        let (mut c, base) = (Collector::default(), Instant::now());
+        calls_at(&mut c, &rig, base, 0, false);
+        *rig.2.lock().unwrap() = Mode::Auth;
+        let (n, s) = calls_at(&mut c, &rig, base, 300, false);
+        assert!(n == 2 && !s.available && s.auth_failed);
+        // Not the 30 s failure retry: the provider's own 300 s.
+        for t in [330, 400, 599] {
+            let (n, s) = calls_at(&mut c, &rig, base, t, false);
+            assert!(n == 2 && s.auth_failed && !s.available, "t={t}");
+        }
+        assert_eq!(calls_at(&mut c, &rig, base, 600, false).0, 3);
+    }
+
+    #[test]
+    fn local_provider_is_not_backed_off() {
+        let rig = fake(4);
+        *rig.2.lock().unwrap() = Mode::Fail;
+        let (mut c, base) = (Collector::default(), Instant::now());
+        for tick in 0..10 {
+            calls_at(&mut c, &rig, base, tick * 5, false);
+        }
+        assert_eq!(rig.1.load(Ordering::SeqCst), 10);
     }
 }

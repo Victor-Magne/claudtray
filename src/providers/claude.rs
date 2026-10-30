@@ -111,11 +111,14 @@ impl Provider for ClaudeProvider {
             }
             Err(FetchError::RateLimited(retry_after)) => {
                 let mins = retry_after.unwrap_or(60).div_ceil(60).to_string();
+                // The retry-after also tells the monitor when to try again (it
+                // keeps its own sticky guard for forced refreshes).
                 ProviderSnapshot::unavailable(
                     self.id(),
                     self.name(),
                     &catalog(lang).provider_rate_limited.replace("{mins}", &mins),
                 )
+                .retry_in(retry_after)
             }
             Err(FetchError::Other) => ProviderSnapshot::unavailable(
                 self.id(),
@@ -258,6 +261,7 @@ impl ClaudeProvider {
             active_sessions: detect_ide_sessions(),
             stale_secs: None,
             auth_failed: false,
+            retry_in_secs: None,
         }
     }
 }
@@ -454,12 +458,7 @@ fn fetch_usage(token: &str) -> Result<UsageResponse, FetchError> {
         }
         401 | 403 => Err(FetchError::Auth),
         429 => {
-            let retry_after = resp
-                .headers()
-                .get("retry-after")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| s.trim().parse::<u64>().ok());
-            Err(FetchError::RateLimited(retry_after))
+            Err(FetchError::RateLimited(super::http::retry_after_secs(resp.headers())))
         }
         _ => Err(FetchError::Other),
     }

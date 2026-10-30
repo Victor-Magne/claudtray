@@ -1,4 +1,4 @@
-use super::http::{agent, Failure};
+use super::http::{agent, failure_for, Failure};
 use super::Provider;
 use crate::model::{ProviderSnapshot, WindowUsage};
 use crate::state::AppState;
@@ -58,9 +58,8 @@ impl Provider for CopilotProvider {
                 self.name(),
                 "Token rejeitado — atualiza-o nas definições",
             ),
-            Err(Failure::Other) => {
-                ProviderSnapshot::unavailable(self.id(), self.name(), "Falha ao obter quota")
-            }
+            Err(f) => ProviderSnapshot::unavailable(self.id(), self.name(), "Falha ao obter quota")
+                .retry_in(f.retry_after()),
         }
     }
 }
@@ -100,6 +99,7 @@ impl CopilotProvider {
             active_sessions: Vec::new(),
             stale_secs: None,
             auth_failed: false,
+            retry_in_secs: None,
         }
     }
 }
@@ -114,12 +114,10 @@ fn fetch(token: &str) -> Result<UserResp, Failure> {
         .header("User-Agent", "ClaudTray")
         .call()
         .map_err(|_| Failure::Other)?;
+    // Only 401 means the token is dead; GitHub also answers 403 for rate limits.
     match resp.status().as_u16() {
         200 => {}
-        // Only 401 means the token is dead; GitHub also answers 403 for
-        // rate limits.
-        401 => return Err(Failure::Auth),
-        _ => return Err(Failure::Other),
+        st => return Err(failure_for(st, resp.headers())),
     }
     let text = resp
         .body_mut()

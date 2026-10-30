@@ -1,4 +1,4 @@
-use super::http::{agent, Failure};
+use super::http::{agent, failure_for, Failure};
 use super::Provider;
 use crate::model::{ProviderSnapshot, WindowUsage};
 use crate::state::AppState;
@@ -50,11 +50,12 @@ impl Provider for OpenRouterProvider {
                 self.name(),
                 "API key rejeitada — atualiza-a nas definições",
             ),
-            Err(Failure::Other) => ProviderSnapshot::unavailable(
+            Err(f) => ProviderSnapshot::unavailable(
                 self.id(),
                 self.name(),
                 "Falha ao obter créditos (key inválida?)",
-            ),
+            )
+            .retry_in(f.retry_after()),
         }
     }
 }
@@ -90,6 +91,7 @@ impl OpenRouterProvider {
             active_sessions: Vec::new(),
             stale_secs: None,
             auth_failed: false,
+            retry_in_secs: None,
         }
     }
 }
@@ -103,11 +105,10 @@ fn fetch(key: &str) -> Result<KeyData, Failure> {
         .header("User-Agent", "ClaudTray")
         .call()
         .map_err(|_| Failure::Other)?;
+    // 401 = bad key; 402 only means out of credits.
     match resp.status().as_u16() {
         200 => {}
-        // 401 = bad key; 402 only means out of credits.
-        401 => return Err(Failure::Auth),
-        _ => return Err(Failure::Other),
+        st => return Err(failure_for(st, resp.headers())),
     }
     let text = resp
         .body_mut()

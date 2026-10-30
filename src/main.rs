@@ -890,6 +890,7 @@ mod alert_tests {
                 active_sessions: Vec::new(),
                 stale_secs: None,
                 auth_failed: false,
+                retry_in_secs: None,
             }],
             catalog: Vec::new(),
             history: Default::default(),

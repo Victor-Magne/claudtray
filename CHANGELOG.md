@@ -51,6 +51,14 @@ Releases before 1.4.0 are only tagged in git and described in their
   A rejected token (401/403) is never masked by those old numbers.
 
 ### Fixed
+- A failing provider is no longer retried every 30 s forever: consecutive
+  failures back off 30 s, 1, 2, 4, 8 and 10 min (reset by the first success),
+  and a `Retry-After` on a 429/503 is honoured (up to 1 h) for Copilot,
+  OpenRouter and Gemini as already for Claude. A rejected token (401) is
+  retried no more often than the provider's normal interval; the manual
+  refresh still tries everything at once. Local providers (Codex, Antigravity,
+  Ollama) are not backed off. The snapshot carries `retry_in_secs` for a UI
+  that wants to show when the next attempt happens.
 - Token totals no longer skip transcripts over 10 MB or past the 300 newest
   files.
 - Estimated cost uses current per-model prices (Opus 5.5, Sonnet 5, Haiku 5.5,
