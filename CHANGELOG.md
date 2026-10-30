@@ -9,6 +9,8 @@ Releases before 1.4.0 are only tagged in git and described in their
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-30
+
 ### Added
 - Per-provider freshness: each provider's page and tab tooltip show "Updated 42s
   ago" (time of its last successful collect, ticking every second), plus what is
@@ -82,8 +84,6 @@ Releases before 1.4.0 are only tagged in git and described in their
 - "Since" and the totals keep accumulating after Claude Code deletes old
   transcripts (the cache no longer forgets them); deleting
   `~/.cache/ClaudTray/claude_usage.json` starts over.
-
-### Fixed
 - The popover now closes when the pointer leaves it and stays out for about
   0.4 s (coming back in time cancels it). It does not close while Settings is
   open or a mouse button is held. Before, on Wayland layer-shell the popover
@@ -114,4 +114,5 @@ Releases before 1.4.0 are only tagged in git and described in their
 - Parsing split from I/O in the Codex, Gemini and Ollama providers so it can be
   unit-tested without network or filesystem.
 
+[1.5.0]: https://github.com/Victor-Magne/claudtray/releases/tag/v1.5.0
 [1.4.0]: https://github.com/Victor-Magne/claudtray/releases/tag/v1.4.0
