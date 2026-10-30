@@ -1,5 +1,6 @@
 pub mod antigravity;
 pub mod claude;
+pub mod claude_usage;
 pub mod codex;
 pub mod copilot;
 pub mod gemini;

@@ -84,6 +84,7 @@ impl Provider for OllamaProvider {
             windows: Vec::new(),
             total_tokens: None,
             estimated_cost_usd: None,
+            usage: None,
             local_models,
             active_sessions: Vec::new(),
             stale_secs: None,

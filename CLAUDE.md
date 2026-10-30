@@ -56,6 +56,12 @@ The app is a single-binary system tray application with a webview popover dashbo
 
 **Provider trait** (`providers/mod.rs`): Each provider implements `Provider::collect(&AppState) -> ProviderSnapshot`. Adding a provider means implementing the trait and registering it in `providers::all()`.
 
+**Claude usage page** (`providers/claude_usage.rs`): one pass over `~/.claude/projects/**/*.jsonl` feeds the Claude page (today/week/month tokens and cost, tokens per weekday and per model, sessions, messages, first date). Claude Code writes the same message several times (streaming chunks, resumed sessions), so entries are de-duplicated by `message.id:requestId`. Parsed entries are cached per file by (path, mtime, size) in memory and in `~/.cache/ClaudTray/claude_usage.json` (`dirs::cache_dir()`); entries of transcripts Claude Code later deletes are kept on purpose so "Since" accumulates. Bump `CACHE_VERSION` when `Entry` changes meaning (cost is stored per entry). Prices live in `model_prices()` by model id; it is an estimate.
+
+**Pace** (`monitor.rs:pace`): `WindowUsage.window_secs` (set by the provider when the window has a fixed length: Claude 5h / 7d) plus `reset_at` give elapsed share minus used share in percentage points, skipped in a window's first 3%. The dashboard shows it as text and a tick on the ring (`PACE_BAND` in `dashboard.js` is the "on pace" width).
+
+**Signed-out alert**: a provider whose token was rejected (HTTP 401 only) returns `ProviderSnapshot::signed_out`, which sets `auth_failed`. `AlertKind::SignedOut` fires once per provider and again only after a recovery; `AlertState::prune` must keep its key while `auth_failed`, and the monitor's 30 s stale cache never masks it. A short-lived token read by `auto-credentials` never counts as signed out.
+
 **Persisted state** (`state.rs`): Stored at `%APPDATA%\ClaudTray\state.json` — holds theme, Copilot token, and last snapshot for instant startup display.
 
 **Status thresholds** (`model.rs`): >50% = Healthy (green), 20–49% = Warning (yellow), 1–19% = Critical (red), 0% or no data = Depleted (gray). The tray icon shows the worst status across all active providers.
