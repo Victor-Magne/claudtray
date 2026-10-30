@@ -58,6 +58,16 @@ pub struct WindowUsage {
     /// would exhaust.
     #[serde(default)]
     pub estimated_exhaustion: Option<String>,
+    /// Fixed length of this window in seconds (Claude's 5h / 7d), when known.
+    /// Pace needs it; windows without one get no pace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_secs: Option<u64>,
+    /// Pace in percentage points: the share of the window already elapsed minus
+    /// the share already used. Positive = under pace, negative = running hot.
+    /// `None` without a window length or reset time, and in the window's first
+    /// 3% (a minute of use says nothing about the pace). Set by the monitor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pace_pct: Option<i32>,
 }
 
 impl WindowUsage {
@@ -75,6 +85,8 @@ impl WindowUsage {
             status: Status::from_remaining(remaining_pct, true),
             reset_at,
             estimated_exhaustion: None,
+            window_secs: None,
+            pace_pct: None,
         }
     }
 }
@@ -125,6 +137,10 @@ pub struct ProviderSnapshot {
     /// Estimated cost in USD for the last 30 days (based on model pricing).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_cost_usd: Option<f64>,
+    /// Tokens, cost, sessions and models aggregated from the local transcripts
+    /// (Claude only). `None` when there are none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::providers::claude_usage::UsageStats>,
     /// Locally installed models (Ollama and similar runtimes).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub local_models: Vec<LocalModelInfo>,
@@ -163,6 +179,7 @@ impl ProviderSnapshot {
             windows: Vec::new(),
             total_tokens: None,
             estimated_cost_usd: None,
+            usage: None,
             local_models: Vec::new(),
             active_sessions: Vec::new(),
             stale_secs: None,
