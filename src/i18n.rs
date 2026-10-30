@@ -88,12 +88,19 @@ pub struct Catalog {
     pub alert_depleted_title: &'static str,
     pub alert_body_exhausted: &'static str,
     pub alert_body_remaining: &'static str,
+    /// Provider rejected the user's token. `{provider}` is replaced.
+    pub alert_signed_out_title: &'static str,
+    pub alert_signed_out_body: &'static str,
     pub tooltip_session: &'static str,
     pub tooltip_weekly: &'static str,
     pub tooltip_default: &'static str,
     /// Tray tooltip: leading word(s) of the "resets in <relative time>" suffix
     /// shown after the worst window's percentage.
     pub tooltip_reset: &'static str,
+    /// Tray tooltip row for a provider whose token was rejected (`{name}: <this>`).
+    pub tooltip_signed_out: &'static str,
+    /// Tray tooltip suffix for a provider showing its last good (no longer live) data.
+    pub tooltip_stale: &'static str,
     /// Claude provider note when the OAuth usage endpoint 429s. `{mins}` is
     /// replaced with the retry-after estimate, rounded up to whole minutes.
     pub provider_rate_limited: &'static str,
@@ -116,10 +123,14 @@ const PT: Catalog = Catalog {
     alert_depleted_title: "ClaudTray — Quota Esgotada",
     alert_body_exhausted: "{provider} {label}: esgotado",
     alert_body_remaining: "{provider} {label}: {pct}% restante",
+    alert_signed_out_title: "ClaudTray — Sessão terminada",
+    alert_signed_out_body: "{provider}: sessão terminada — volta a autenticar",
     tooltip_session: "SESSÃO",
     tooltip_weekly: "SEMANAL",
     tooltip_default: "ClaudTray — Monitor de Uso de IA",
     tooltip_reset: "repõe em",
+    tooltip_signed_out: "sessão terminada",
+    tooltip_stale: "desatualizado",
     provider_rate_limited: "Limite da API atingido — tenta em ~{mins} min",
     alert_predictive_title: "ClaudTray — Quota a Esgotar",
     alert_predictive_body: "{provider} {label}: esgota em ~{mins} min",
@@ -135,10 +146,14 @@ const EN: Catalog = Catalog {
     alert_depleted_title: "ClaudTray — Quota Exhausted",
     alert_body_exhausted: "{provider} {label}: exhausted",
     alert_body_remaining: "{provider} {label}: {pct}% remaining",
+    alert_signed_out_title: "ClaudTray — Signed Out",
+    alert_signed_out_body: "{provider}: signed out — sign in again",
     tooltip_session: "SESSION",
     tooltip_weekly: "WEEKLY",
     tooltip_default: "ClaudTray — AI Usage Monitor",
     tooltip_reset: "resets in",
+    tooltip_signed_out: "signed out",
+    tooltip_stale: "stale",
     provider_rate_limited: "API limit reached — try again in ~{mins} min",
     alert_predictive_title: "ClaudTray — Quota Running Low",
     alert_predictive_body: "{provider} {label}: runs out in ~{mins} min",

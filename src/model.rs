@@ -58,6 +58,16 @@ pub struct WindowUsage {
     /// would exhaust.
     #[serde(default)]
     pub estimated_exhaustion: Option<String>,
+    /// Fixed length of this window in seconds (Claude's 5h / 7d), when known.
+    /// Pace needs it; windows without one get no pace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_secs: Option<u64>,
+    /// Pace in percentage points: the share of the window already elapsed minus
+    /// the share already used. Positive = under pace, negative = running hot.
+    /// `None` without a window length or reset time, and in the window's first
+    /// 3% (a minute of use says nothing about the pace). Set by the monitor.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pace_pct: Option<i32>,
 }
 
 impl WindowUsage {
@@ -75,6 +85,8 @@ impl WindowUsage {
             status: Status::from_remaining(remaining_pct, true),
             reset_at,
             estimated_exhaustion: None,
+            window_secs: None,
+            pace_pct: None,
         }
     }
 }
@@ -125,6 +137,10 @@ pub struct ProviderSnapshot {
     /// Estimated cost in USD for the last 30 days (based on model pricing).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub estimated_cost_usd: Option<f64>,
+    /// Tokens, cost, sessions and models aggregated from the local transcripts
+    /// (Claude only). `None` when there are none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::providers::claude_usage::UsageStats>,
     /// Locally installed models (Ollama and similar runtimes).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub local_models: Vec<LocalModelInfo>,
@@ -137,9 +153,41 @@ pub struct ProviderSnapshot {
     /// the numbers are no longer live instead of showing stale data as current.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale_secs: Option<u64>,
+    /// The provider rejected the user's token (HTTP 401): they have to sign in
+    /// again. Drives the one-shot "signed out" notification. Never set for a
+    /// token ClaudTray picked up on its own (a short-lived CLI token expiring
+    /// is normal, not an alert).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auth_failed: bool,
+    /// Two-way field. A failing provider sets it to the server's `Retry-After`
+    /// (seconds); the monitor consumes it and refills it, on whatever it shows
+    /// for a failed provider, with the time left until the next attempt, so the
+    /// UI can say "retrying in…". `None` when the provider is not backing off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_in_secs: Option<u64>,
+    /// RFC3339 (local offset) time of this provider's last SUCCESSFUL
+    /// collection. Set by the monitor when it stores a good result (a provider
+    /// refreshes on its own interval, so fresh data can be minutes old); the UI
+    /// shows "updated Xs ago" from it. `None` until one succeeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fetched_at: Option<String>,
 }
 
 impl ProviderSnapshot {
+    /// Report the server's `Retry-After` (seconds) with a failed snapshot.
+    pub fn retry_in(mut self, secs: Option<u64>) -> Self {
+        self.retry_in_secs = secs;
+        self
+    }
+
+    /// An unavailable snapshot whose cause is a rejected token.
+    pub fn signed_out(id: &str, name: &str, note: &str) -> Self {
+        Self {
+            auth_failed: true,
+            ..Self::unavailable(id, name, note)
+        }
+    }
+
     pub fn unavailable(id: &str, name: &str, note: &str) -> Self {
         Self {
             id: id.to_string(),
@@ -149,9 +197,13 @@ impl ProviderSnapshot {
             windows: Vec::new(),
             total_tokens: None,
             estimated_cost_usd: None,
+            usage: None,
             local_models: Vec::new(),
             active_sessions: Vec::new(),
             stale_secs: None,
+            auth_failed: false,
+            retry_in_secs: None,
+            fetched_at: None,
         }
     }
 }

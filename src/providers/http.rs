@@ -9,6 +9,42 @@ use ureq::Agent;
 /// exhaust memory — amplified by the parallel per-provider threads.
 pub const MAX_BODY_BYTES: u64 = 1_048_576;
 
+/// Why a provider fetch produced nothing: the credential was rejected (the user
+/// must sign in again) or anything else (network, 5xx, bad payload…).
+#[derive(Debug, PartialEq, Eq)]
+pub enum Failure {
+    Auth,
+    /// 429/503 with a `Retry-After` of this many seconds.
+    Throttled(u64),
+    Other,
+}
+
+impl Failure {
+    /// The server-provided retry delay, if any.
+    pub fn retry_after(&self) -> Option<u64> {
+        match self {
+            Failure::Throttled(s) => Some(*s),
+            _ => None,
+        }
+    }
+}
+
+/// Seconds from a `Retry-After` header. The HTTP-date form is not parsed
+/// (ponytail: the APIs polled here send seconds; the monitor's own backoff
+/// still applies if one ever sends a date).
+pub fn retry_after_secs(headers: &ureq::http::HeaderMap) -> Option<u64> {
+    headers.get("retry-after")?.to_str().ok()?.trim().parse().ok()
+}
+
+/// What a non-200 status means for a provider whose only auth failure is 401.
+pub fn failure_for(status: u16, headers: &ureq::http::HeaderMap) -> Failure {
+    match status {
+        401 => Failure::Auth,
+        429 | 503 => retry_after_secs(headers).map_or(Failure::Other, Failure::Throttled),
+        _ => Failure::Other,
+    }
+}
+
 /// Global proxy URL applied to every agent. Stored behind a `RwLock` (not a
 /// `OnceLock`) so a runtime change in Settings takes effect on the next refresh
 /// instead of being silently ignored until the next app launch.
@@ -48,7 +84,9 @@ fn proxy_url() -> Option<String> {
 /// A short-timeout ureq agent. `insecure` disables TLS certificate
 /// verification — required for the Antigravity language server, which serves
 /// over HTTPS on localhost with a self-signed certificate. The global timeout
-/// keeps a hung endpoint from stalling a refresh.
+/// keeps a hung endpoint from stalling a refresh. Redirects are never followed:
+/// every provider endpoint answers directly, and following one would forward
+/// custom secret headers (e.g. the Antigravity CSRF token) to wherever it points.
 pub fn agent(insecure: bool) -> Agent {
     let tls = if insecure {
         TlsConfig::builder().disable_verification(true).build()
@@ -57,6 +95,7 @@ pub fn agent(insecure: bool) -> Agent {
     };
     let mut builder = ureq::config::Config::builder()
         .timeout_global(Some(Duration::from_secs(5)))
+        .max_redirects(0)
         .http_status_as_error(false)
         .tls_config(tls);
     if let Some(proxy) = proxy_url() {
@@ -67,27 +106,28 @@ pub fn agent(insecure: bool) -> Agent {
     builder.build().new_agent()
 }
 
-/// Retry a fallible operation up to `attempts` times with linear backoff.
-/// Backoff starts at `delay_secs` and increases by `delay_secs` per retry.
-/// Returns the first `Some` result, or `None` if all attempts fail.
-pub fn with_retry<T, F>(attempts: u8, delay_secs: u64, mut f: F) -> Option<T>
-where
-    F: FnMut() -> Option<T>,
-{
-    for i in 0..attempts {
-        if i > 0 {
-            std::thread::sleep(Duration::from_secs(delay_secs * i as u64));
-        }
-        if let Some(v) = f() {
-            return Some(v);
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_never_follows_redirects() {
+        assert_eq!(agent(false).config().max_redirects(), 0);
+        assert_eq!(agent(true).config().max_redirects(), 0);
+    }
+
+    #[test]
+    fn retry_after_is_read_for_429_and_503_only() {
+        let mut h = ureq::http::HeaderMap::new();
+        assert_eq!(failure_for(429, &h), Failure::Other, "no header, no delay");
+        h.insert("retry-after", " 120 ".parse().unwrap());
+        assert_eq!(failure_for(429, &h), Failure::Throttled(120));
+        assert_eq!(failure_for(503, &h), Failure::Throttled(120));
+        assert_eq!(failure_for(500, &h), Failure::Other);
+        assert_eq!(failure_for(401, &h), Failure::Auth);
+        h.insert("retry-after", "Wed, 21 Oct 2026 07:28:00 GMT".parse().unwrap());
+        assert_eq!(failure_for(429, &h), Failure::Other);
+    }
 
     #[test]
     fn is_valid_proxy_requires_http_scheme_and_a_host() {

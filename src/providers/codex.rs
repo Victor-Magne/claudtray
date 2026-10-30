@@ -39,6 +39,10 @@ impl Provider for CodexProvider {
         "codex"
     }
 
+    fn min_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(4) // local files; just under the 5 s tick
+    }
+
     fn name(&self) -> &'static str {
         "Codex"
     }
@@ -71,9 +75,13 @@ impl Provider for CodexProvider {
                         windows,
                         total_tokens: None,
                         estimated_cost_usd: None,
+                        usage: None,
                         local_models: Vec::new(),
                         active_sessions: Vec::new(),
                         stale_secs: None,
+                        auth_failed: false,
+                        retry_in_secs: None,
+                        fetched_at: None,
                     };
                 }
             }
