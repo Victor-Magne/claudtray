@@ -30,7 +30,7 @@ Releases before 1.4.0 are only tagged in git and described in their
   rows that do not fit its 127-character limit are dropped whole.
 
 ### Changed
-- Each provider now refreshes on its own minimum interval (Claude 60 s,
+- Each provider now refreshes on its own minimum interval (Claude 90 s,
   Copilot and OpenRouter 5 min, Gemini 10 min; local Codex, Antigravity and
   Ollama every tick) instead of every provider on every 5 s tick, which caused
   429s and timeouts while the popover was open. Skipped providers reuse their
@@ -42,6 +42,13 @@ Releases before 1.4.0 are only tagged in git and described in their
   stale. Providers make one attempt per refresh instead of up to three with 1 s
   and 2 s sleeps between them; a failed one is retried by the next refresh
   rather than inside the same one.
+- Claude reads the usage cache shared with the DMS shell plugin
+  (`~/.claude/usage-cache.json`, read-only) when it is under 90 s old and
+  belongs to this machine's credentials, so both together make one request per
+  90 s instead of one each. The last good response is also kept in
+  `~/.cache/ClaudTray/claude_usage_api.json` and shown (marked stale) when a
+  request fails with 429, a network error or 5xx, instead of emptying the card.
+  A rejected token (401/403) is never masked by those old numbers.
 
 ### Fixed
 - Token totals no longer skip transcripts over 10 MB or past the 300 newest

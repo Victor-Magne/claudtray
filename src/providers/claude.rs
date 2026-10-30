@@ -4,8 +4,9 @@ use crate::i18n::{catalog, Lang};
 use crate::model::{ActiveSession, ProviderSnapshot, WindowUsage};
 use crate::state::AppState;
 use chrono::{DateTime, Local, Utc};
-use serde::Deserialize;
-use std::time::Duration;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Claude (claude.ai / Claude Code subscription). Reads the *real* usage that
 /// Claude Desktop shows, from Anthropic's OAuth usage endpoint, using an OAuth
@@ -17,14 +18,14 @@ pub struct ClaudeProvider;
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct UsageResponse {
     five_hour: Option<Quota>,
     seven_day: Option<Quota>,
     seven_day_opus: Option<Quota>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct Quota {
     /// Percent of the window already consumed (0-100).
     utilization: Option<f64>,
@@ -38,7 +39,7 @@ impl Provider for ClaudeProvider {
     }
 
     fn min_interval(&self) -> std::time::Duration {
-        std::time::Duration::from_secs(60)
+        Duration::from_secs(SHARED_TTL_SECS)
     }
 
     fn name(&self) -> &'static str {
@@ -56,20 +57,48 @@ impl Provider for ClaudeProvider {
 
         let lang = Lang::from_pref(&state.language);
 
-        // Honour a previous 429's retry-after: don't touch the endpoint again
-        // until the window has passed (the dashboard polls every 5 s while
-        // open, which would otherwise keep extending the block).
-        if let Some(wait) = rate_limited_for() {
-            let mins = wait.as_secs().div_ceil(60).to_string();
-            return ProviderSnapshot::unavailable(
-                self.id(),
-                self.name(),
-                &catalog(lang).provider_rate_limited.replace("{mins}", &mins),
-            );
-        }
+        let now = now_secs();
+        // The shared cache belongs to the account in `~/.claude/.credentials.json`.
+        // A token the user pasted (Settings / env var) may be another account, so
+        // then the file must not be trusted; it also keeps public builds, which
+        // never fall back to that credentials file, from reading it at all.
+        let shared = if explicit_token(state).is_none() {
+            shared_cache_paths()
+                .and_then(|(file, identity)| shared_usage(&std::fs::read(file).ok()?, &identity, now))
+        } else {
+            None
+        };
+        let own = own_cache_path();
 
-        match fetch_usage(&token) {
-            Ok(resp) => self.build(resp),
+        let result = usage_with_fallback(shared, own.as_deref().and_then(load_own), now, || {
+            // Honour a previous 429's retry-after: don't touch the endpoint
+            // again until the window has passed (the dashboard polls every 5 s
+            // while open, which would otherwise keep extending the block).
+            if let Some(wait) = rate_limited_for() {
+                return Err(FetchError::RateLimited(Some(wait.as_secs())));
+            }
+            match fetch_usage(&token) {
+                Ok(resp) => {
+                    if let Some(p) = own.as_deref() {
+                        save_own(p, &resp, now);
+                    }
+                    Ok(resp)
+                }
+                Err(FetchError::RateLimited(retry_after)) => {
+                    let secs = retry_after.unwrap_or(60).min(3600);
+                    set_rate_limited(Duration::from_secs(secs));
+                    Err(FetchError::RateLimited(Some(secs)))
+                }
+                Err(e) => Err(e),
+            }
+        });
+
+        match result {
+            Ok((resp, stale_secs)) => {
+                let mut snap = self.build(resp);
+                snap.stale_secs = stale_secs;
+                snap
+            }
             Err(FetchError::Auth) => {
                 let note = "Token inválido/expirado — gera um novo com `claude setup-token`";
                 // Only a token the user supplied can be "signed out"; the
@@ -81,9 +110,7 @@ impl Provider for ClaudeProvider {
                 }
             }
             Err(FetchError::RateLimited(retry_after)) => {
-                let secs = retry_after.unwrap_or(60).min(3600);
-                set_rate_limited(Duration::from_secs(secs));
-                let mins = secs.div_ceil(60).to_string();
+                let mins = retry_after.unwrap_or(60).div_ceil(60).to_string();
                 ProviderSnapshot::unavailable(
                     self.id(),
                     self.name(),
@@ -96,6 +123,92 @@ impl Provider for ClaudeProvider {
                 "Não foi possível obter o uso",
             ),
         }
+    }
+}
+
+/// Claude's cadence, and the TTL of the cache shared with the DMS shell plugin
+/// (`~/.claude/usage-cache.json`): both sides refresh at most once per 90 s.
+const SHARED_TTL_SECS: u64 = 90;
+
+fn now_secs() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// (shared cache file, identity string). The plugin stores the path of the
+/// credentials file as identity, so it only matches the same machine and user.
+fn shared_cache_paths() -> Option<(PathBuf, String)> {
+    let claude = dirs::home_dir()?.join(".claude");
+    let identity = claude.join(".credentials.json").to_string_lossy().into_owned();
+    Some((claude.join("usage-cache.json"), identity))
+}
+
+/// The plugin's file: `{cached_at (unix secs), identity, data}`. Read-only here.
+#[derive(Deserialize)]
+struct SharedCache {
+    cached_at: u64,
+    identity: String,
+    data: UsageResponse,
+}
+
+/// `data` of the shared cache, if it is fresh, ours and well-formed. Anything
+/// else (corrupt, foreign identity, stale, from the future) is ignored.
+fn shared_usage(raw: &[u8], identity: &str, now: u64) -> Option<UsageResponse> {
+    let c: SharedCache = serde_json::from_slice(raw).ok()?;
+    let age = now.checked_sub(c.cached_at)?;
+    (c.identity == identity && age < SHARED_TTL_SECS).then_some(c.data)
+}
+
+/// Our own last good API response, under `dirs::cache_dir()/ClaudTray`.
+#[derive(Deserialize, Serialize)]
+struct OwnCache {
+    cached_at: u64,
+    data: UsageResponse,
+}
+
+fn own_cache_path() -> Option<PathBuf> {
+    Some(dirs::cache_dir()?.join("ClaudTray").join("claude_usage_api.json"))
+}
+
+fn load_own(path: &Path) -> Option<OwnCache> {
+    serde_json::from_slice(&std::fs::read(path).ok()?).ok()
+}
+
+/// Atomic (tmp + rename), best effort.
+fn save_own(path: &Path, data: &UsageResponse, now: u64) {
+    #[derive(Serialize)]
+    struct Out<'a> {
+        cached_at: u64,
+        data: &'a UsageResponse,
+    }
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension("json.tmp");
+    if let Ok(bytes) = serde_json::to_vec(&Out { cached_at: now, data }) {
+        if std::fs::write(&tmp, bytes).is_ok() {
+            let _ = std::fs::rename(&tmp, path);
+        }
+    }
+}
+
+/// A fresh shared cache wins with zero requests; otherwise `fetch`. A failed
+/// fetch falls back to our last good response (second value = its age in
+/// seconds, shown as "stale") — except `Auth`, which is never masked.
+fn usage_with_fallback(
+    shared: Option<UsageResponse>,
+    own: Option<OwnCache>,
+    now: u64,
+    fetch: impl FnOnce() -> Result<UsageResponse, FetchError>,
+) -> Result<(UsageResponse, Option<u64>), FetchError> {
+    if let Some(resp) = shared {
+        return Ok((resp, None));
+    }
+    match fetch() {
+        Ok(resp) => Ok((resp, None)),
+        Err(FetchError::Auth) => Err(FetchError::Auth),
+        Err(e) => own
+            .map(|c| (c.data, Some(now.saturating_sub(c.cached_at))))
+            .ok_or(e),
     }
 }
 
@@ -392,6 +505,101 @@ mod tests {
         let session = window("session", "SESSION", resp.five_hour.unwrap());
         assert_eq!(session.remaining_pct, 0);
         assert_eq!(session.status, Status::Depleted);
+    }
+
+    const IDENTITY: &str = "/home/u/.claude/.credentials.json";
+    const NOW: u64 = 1_800_000_000;
+
+    fn usage() -> UsageResponse {
+        serde_json::from_str(include_str!("../../tests/fixtures/claude/usage.json")).unwrap()
+    }
+
+    fn shared_file(cached_at: u64, identity: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "cached_at": cached_at,
+            "identity": identity,
+            "data": usage(),
+        }))
+        .unwrap()
+    }
+
+    fn session_used(r: &UsageResponse) -> Option<f64> {
+        r.five_hour.as_ref()?.utilization
+    }
+
+    #[test]
+    fn shared_cache_fresh_is_used_without_any_request() {
+        let shared = shared_usage(&shared_file(NOW - 89, IDENTITY), IDENTITY, NOW);
+        assert!(shared.is_some());
+        let mut requests = 0;
+        let r = usage_with_fallback(shared, None, NOW, || {
+            requests += 1;
+            Err(FetchError::Other)
+        });
+        assert!(matches!(r, Ok((_, None))));
+        assert_eq!(requests, 0);
+    }
+
+    #[test]
+    fn shared_cache_stale_foreign_future_or_corrupt_is_ignored() {
+        assert!(shared_usage(&shared_file(NOW - 90, IDENTITY), IDENTITY, NOW).is_none());
+        assert!(shared_usage(&shared_file(NOW, "/other/.credentials.json"), IDENTITY, NOW).is_none());
+        assert!(shared_usage(&shared_file(NOW + 60, IDENTITY), IDENTITY, NOW).is_none());
+        for junk in [&b""[..], b"{", b"[]", b"{\"cached_at\":1}", b"\xff\xfe"] {
+            assert!(shared_usage(junk, IDENTITY, NOW).is_none());
+        }
+
+        // Stale => exactly one request.
+        let mut requests = 0;
+        let r = usage_with_fallback(
+            shared_usage(&shared_file(NOW - 500, IDENTITY), IDENTITY, NOW),
+            None,
+            NOW,
+            || {
+                requests += 1;
+                Ok(usage())
+            },
+        );
+        assert!(matches!(r, Ok((_, None))));
+        assert_eq!(requests, 1);
+    }
+
+    #[test]
+    fn own_cache_roundtrips_atomically_and_bad_files_are_ignored() {
+        let dir = std::env::temp_dir().join(format!("claudtray-test-{}", std::process::id()));
+        let path = dir.join("nested").join("claude_usage_api.json");
+        assert!(load_own(&path).is_none(), "missing file");
+
+        save_own(&path, &usage(), NOW);
+        let saved = load_own(&path).expect("roundtrip");
+        assert_eq!(saved.cached_at, NOW);
+        assert_eq!(session_used(&saved.data), Some(42.5));
+        assert!(!path.with_extension("json.tmp").exists(), "tmp renamed away");
+
+        std::fs::write(&path, b"{not json").unwrap();
+        assert!(load_own(&path).is_none(), "corrupt file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn own_cache_is_used_when_the_request_fails_but_not_on_auth() {
+        let own = || Some(OwnCache { cached_at: NOW - 300, data: usage() });
+        for err in [FetchError::RateLimited(Some(60)), FetchError::Other] {
+            let r = usage_with_fallback(None, own(), NOW, || Err(err));
+            match r {
+                Ok((resp, stale)) => {
+                    assert_eq!(session_used(&resp), Some(42.5));
+                    assert_eq!(stale, Some(300));
+                }
+                Err(_) => panic!("own cache should have been served"),
+            }
+        }
+        // No own cache => the original error surfaces.
+        let r = usage_with_fallback(None, None, NOW, || Err(FetchError::RateLimited(Some(60))));
+        assert!(matches!(r, Err(FetchError::RateLimited(Some(60)))));
+        // 401/403 is never masked by old numbers.
+        let r = usage_with_fallback(None, own(), NOW, || Err(FetchError::Auth));
+        assert!(matches!(r, Err(FetchError::Auth)));
     }
 
     #[test]
