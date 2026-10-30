@@ -10,6 +10,13 @@ Releases before 1.4.0 are only tagged in git and described in their
 ## [Unreleased]
 
 ### Added
+- Claude page redesigned: a ring per quota window (filled with the share used,
+  with a tick where the elapsed time says you should be), pace ("30% under
+  pace", skipped in a window's first 3%), token consumption for today / week /
+  month with estimated cost, daily activity, tokens per model and the date of
+  your first record. Built from `~/.claude/projects`, de-duplicated by message
+  and cached per file so a relaunch only re-reads what changed.
+- Reset countdowns show days ("2d 3h 28m").
 - A "signed out" notification when Claude, Copilot or OpenRouter rejects your
   token (HTTP 401). It fires once per provider and again only after the
   provider has worked and then failed anew. A short-lived Claude Code CLI token
@@ -21,6 +28,24 @@ Releases before 1.4.0 are only tagged in git and described in their
   window, remaining percentage and reset countdown, instead of only the single
   worst window. Signed-out and stale providers are flagged in it. On Windows,
   rows that do not fit its 127-character limit are dropped whole.
+
+### Changed
+- Each provider now refreshes on its own minimum interval (Claude 60 s,
+  Copilot and OpenRouter 5 min, Gemini 10 min; local Codex, Antigravity and
+  Ollama every tick) instead of every provider on every 5 s tick, which caused
+  429s and timeouts while the popover was open. Skipped providers reuse their
+  last snapshot without being marked stale; the manual refresh and saving a new
+  credential still refresh everything at once.
+
+### Fixed
+- Token totals no longer skip transcripts over 10 MB or past the 300 newest
+  files.
+- Estimated cost uses current per-model prices (Opus 5.5, Sonnet 5, Haiku 5.5,
+  Fable…) with each model's own cache-read price, instead of one old tier per
+  family, and 1-hour cache writes at 2×. It stays an estimate.
+- "Since" and the totals keep accumulating after Claude Code deletes old
+  transcripts (the cache no longer forgets them); deleting
+  `~/.cache/ClaudTray/claude_usage.json` starts over.
 
 ### Security
 - Provider HTTP requests no longer follow redirects, so a custom secret header

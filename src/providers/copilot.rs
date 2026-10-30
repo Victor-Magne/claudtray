@@ -34,6 +34,10 @@ impl Provider for CopilotProvider {
         "copilot"
     }
 
+    fn min_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(300)
+    }
+
     fn name(&self) -> &'static str {
         "Copilot"
     }
@@ -91,6 +95,7 @@ impl CopilotProvider {
             windows: vec![window],
             total_tokens: None,
             estimated_cost_usd: None,
+            usage: None,
             local_models: Vec::new(),
             active_sessions: Vec::new(),
             stale_secs: None,

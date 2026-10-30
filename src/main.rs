@@ -178,7 +178,7 @@ async fn main() {
     // First refresh + adaptive background ticker. While the popover is open we
     // poll fast (near real-time); when it's hidden we slow down to spare the
     // provider APIs. All refreshes run off the UI thread (network I/O).
-    spawn_refresh(&monitor, &proxy);
+    spawn_refresh(&monitor, &proxy, false);
     // The dashboard is shown on launch (see below), so start the ticker on the
     // fast cadence right away.
     let dashboard_open = Arc::new(AtomicBool::new(true));
@@ -215,7 +215,7 @@ async fn main() {
         *control_flow = ControlFlow::Wait;
 
         match event {
-            Event::UserEvent(UserEvent::Tick) => spawn_refresh(&monitor, &proxy),
+            Event::UserEvent(UserEvent::Tick) => spawn_refresh(&monitor, &proxy, false),
             Event::UserEvent(UserEvent::Snapshot(snap)) => {
                 // Fire one notification for the worst window that newly needs
                 // attention — a fresh Critical/Depleted, a near-term projected
@@ -269,7 +269,7 @@ async fn main() {
                 }
                 last_action = Instant::now();
             }
-            Event::UserEvent(UserEvent::MenuRefresh) => spawn_refresh(&monitor, &proxy),
+            Event::UserEvent(UserEvent::MenuRefresh) => spawn_refresh(&monitor, &proxy, true),
             Event::UserEvent(UserEvent::MenuExit) => {
                 #[cfg(windows)]
                 tray.take();
@@ -289,7 +289,7 @@ async fn main() {
                         dashboard.push(snap);
                     }
                 }
-                IpcMessage::Refresh => spawn_refresh(&monitor, &proxy),
+                IpcMessage::Refresh => spawn_refresh(&monitor, &proxy, true),
                 IpcMessage::SetTheme(theme) => {
                     // Applied instantly in JS; here we mirror the preference,
                     // retint the Mica backdrop and persist. "system" follows the
@@ -415,11 +415,13 @@ async fn main() {
 /// Run a refresh on a background thread and deliver the snapshot to the UI. If a
 /// refresh (or token/theme update) already holds the lock, this tick is skipped
 /// so fast polling never piles up.
-fn spawn_refresh(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>) {
+fn spawn_refresh(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>, force: bool) {
     let monitor = Arc::clone(monitor);
     let proxy = proxy.clone();
     std::thread::spawn(move || {
         let snapshot = match monitor.try_lock() {
+            // `force` (manual refresh) bypasses each provider's min_interval.
+            Ok(mut guard) if force => guard.refresh_now(),
             Ok(mut guard) => guard.refresh(),
             Err(_) => return,
         };
@@ -452,7 +454,7 @@ fn spawn_set_token(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEvent>, t
         let snapshot = {
             let mut guard = monitor.lock().unwrap();
             guard.set_copilot_token(&token);
-            guard.refresh()
+            guard.refresh_now()
         };
         let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
     });
@@ -503,7 +505,7 @@ fn spawn_set_claude_token(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEv
         let snapshot = {
             let mut guard = monitor.lock().unwrap();
             guard.set_claude_token(&token);
-            guard.refresh()
+            guard.refresh_now()
         };
         let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
     });
@@ -516,7 +518,7 @@ fn spawn_set_openrouter_key(monitor: &SharedMonitor, proxy: &EventLoopProxy<User
         let snapshot = {
             let mut guard = monitor.lock().unwrap();
             guard.set_openrouter_key(&key);
-            guard.refresh()
+            guard.refresh_now()
         };
         let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
     });
@@ -529,7 +531,7 @@ fn spawn_set_gemini_key(monitor: &SharedMonitor, proxy: &EventLoopProxy<UserEven
         let snapshot = {
             let mut guard = monitor.lock().unwrap();
             guard.set_gemini_key(&key);
-            guard.refresh()
+            guard.refresh_now()
         };
         let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
     });
@@ -548,7 +550,7 @@ fn spawn_set_disabled_providers(
         let snapshot = {
             let mut guard = monitor.lock().unwrap();
             guard.set_disabled_providers(ids);
-            guard.refresh()
+            guard.refresh_now()
         };
         let _ = proxy.send_event(UserEvent::Snapshot(snapshot));
     });
@@ -877,6 +879,7 @@ mod alert_tests {
                 windows,
                 total_tokens: None,
                 estimated_cost_usd: None,
+                usage: None,
                 local_models: Vec::new(),
                 active_sessions: Vec::new(),
                 stale_secs: None,
