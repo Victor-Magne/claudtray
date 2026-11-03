@@ -62,6 +62,8 @@ const STRINGS = {
     retryIn: (d) => `a tentar de novo em ${d}`,
     retryNow: "a tentar de novo…",
     signedOut: "sessão terminada — volta a autenticar",
+    planLabel: "Plano:",
+    partialNote: "Vista parcial: o servidor não devolveu o resumo de quotas.",
     win5h: "Janela de 5h",
     win7d: "Uso de 7 dias",
     usedSuffix: "usado",
@@ -124,6 +126,8 @@ const STRINGS = {
     retryIn: (d) => `retrying in ${d}`,
     retryNow: "retrying…",
     signedOut: "signed out — sign in again",
+    planLabel: "Plan:",
+    partialNote: "Partial view: the server did not return the quota summary.",
     win5h: "5h Rate Window",
     win7d: "7-Day Usage",
     usedSuffix: "used",
@@ -309,6 +313,14 @@ function renderCards() {
   }
 
   wrap.appendChild(freshLine(p));
+
+  if (p.plan) {
+    wrap.appendChild(div("plan-line", t("planLabel") + " " + p.plan));
+  }
+
+  if (p.partial) {
+    wrap.appendChild(div("partial-banner", t("partialNote")));
+  }
 
   if (p.stale_secs != null) {
     const stale = document.createElement("div");

@@ -334,7 +334,15 @@ html[data-theme="light"] .fresh-line.alert {
   margin-top: 6px;
 }
 
-.stale-banner {
+.plan-line {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  color: var(--fg-dim);
+  padding: 0 2px;
+}
+
+.stale-banner,
+.partial-banner {
   grid-column: 1 / -1;
   font-size: 11px;
   padding: 6px 10px;

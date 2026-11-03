@@ -176,6 +176,12 @@ pub struct ProviderSnapshot {
     /// shows "updated Xs ago" from it. `None` until one succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fetched_at: Option<String>,
+    /// Plan name (e.g. "Pro" in Antigravity). Shown in the dashboard when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// Whether this snapshot is partial (e.g. fallback per-model view in Antigravity).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub partial: bool,
 }
 
 impl ProviderSnapshot {
@@ -209,6 +215,8 @@ impl ProviderSnapshot {
             auth_failed: false,
             retry_in_secs: None,
             fetched_at: None,
+            plan: None,
+            partial: false,
         }
     }
 }

@@ -1,0 +1,21 @@
+{
+  "userStatus": {
+    "name": "Fixture User",
+    "email": "fixture-user@example.invalid",
+    "profilePictureUrl": "https://example.invalid/avatar.png",
+    "planStatus": {
+      "planInfo": { "planName": "Pro" },
+      "availablePromptCredits": 500
+    },
+    "cascadeModelConfigData": {
+      "clientModelConfigs": [
+        { "label": "Modelo A (Low)",    "quotaInfo": { "remainingFraction": 0.8, "resetTime": "2026-11-03T13:03:37Z" } },
+        { "label": "Modelo A (High)",   "quotaInfo": { "remainingFraction": 0.8, "resetTime": "2026-11-03T13:03:37Z" } },
+        { "label": "Modelo B",          "quotaInfo": { "remainingFraction": 0.8, "resetTime": "2026-11-10T08:03:37Z" } },
+        { "label": "Modelo C (sem fracao)", "quotaInfo": { "resetTime": "2026-11-03T13:03:37Z" } },
+        { "label": "Modelo D (sem nada)",   "quotaInfo": {} },
+        { "label": "Modelo E (sem quota)" }
+      ]
+    }
+  }
+}

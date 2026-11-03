@@ -48,6 +48,7 @@ impl Provider for AntigravityProvider {
             for port in find_listen_ports(*pid) {
                 if let Some(windows) = probe_summary(port, token) {
                     if !windows.is_empty() {
+                        let plan = fetch_user_status(port, token).as_ref().and_then(plan_name);
                         return ProviderSnapshot {
                             id: self.id().to_string(),
                             name: self.name().to_string(),
@@ -63,10 +64,14 @@ impl Provider for AntigravityProvider {
                             auth_failed: false,
                             retry_in_secs: None,
                             fetched_at: None,
+                            plan,
+                            partial: false,
                         };
                     }
                 }
-                if let Some(windows) = probe(port, token) {
+                if let Some(resp) = fetch_user_status(port, token) {
+                    let plan = plan_name(&resp);
+                    let windows = build_fallback_windows(resp);
                     if !windows.is_empty() {
                         return ProviderSnapshot {
                             id: self.id().to_string(),
@@ -83,6 +88,8 @@ impl Provider for AntigravityProvider {
                             auth_failed: false,
                             retry_in_secs: None,
                             fetched_at: None,
+                            plan,
+                            partial: true,
                         };
                     }
                 }
@@ -164,7 +171,7 @@ fn find_listen_ports(pid: u32) -> Vec<u16> {
     ports.into_iter().map(|(_, p)| p).collect()
 }
 
-fn probe(port: u16, token: &str) -> Option<Vec<WindowUsage>> {
+fn fetch_user_status(port: u16, token: &str) -> Option<Resp> {
     // HTTPS only. The language server uses a self-signed localhost certificate
     // (hence `agent(true)` to skip CA validation), but we never fall back to
     // plaintext HTTP: doing so would leak the CSRF token in clear over loopback,
@@ -188,13 +195,7 @@ fn probe(port: u16, token: &str) -> Option<Vec<WindowUsage>> {
         .limit(super::http::MAX_BODY_BYTES)
         .read_to_string()
         .ok()?;
-    let parsed = serde_json::from_str::<Resp>(&text).ok()?;
-    let windows = build_windows(parsed);
-    if windows.is_empty() {
-        None
-    } else {
-        Some(windows)
-    }
+    serde_json::from_str::<Resp>(&text).ok()
 }
 
 fn probe_summary(port: u16, token: &str) -> Option<Vec<WindowUsage>> {
@@ -228,32 +229,45 @@ fn probe_summary(port: u16, token: &str) -> Option<Vec<WindowUsage>> {
 
 // ---- Response model ----
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct Resp {
     #[serde(rename = "userStatus")]
     user_status: Option<UserStatus>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct UserStatus {
+    #[serde(rename = "planStatus")]
+    plan_status: Option<PlanStatus>,
     #[serde(rename = "cascadeModelConfigData")]
     cascade: Option<Cascade>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
+struct PlanStatus {
+    #[serde(rename = "planInfo")]
+    plan_info: Option<PlanInfo>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PlanInfo {
+    #[serde(rename = "planName")]
+    plan_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct Cascade {
     #[serde(rename = "clientModelConfigs")]
     configs: Option<Vec<ModelConfig>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct ModelConfig {
-    label: Option<String>,
     #[serde(rename = "quotaInfo")]
     quota: Option<QuotaInfo>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct QuotaInfo {
     #[serde(rename = "remainingFraction")]
     remaining_fraction: Option<f64>,
@@ -328,33 +342,73 @@ fn build_summary_windows(resp: QuotaSummaryResp) -> Vec<WindowUsage> {
     windows
 }
 
-fn build_windows(resp: Resp) -> Vec<WindowUsage> {
+fn plan_name(resp: &Resp) -> Option<String> {
+    resp.user_status
+        .as_ref()
+        .and_then(|u| u.plan_status.as_ref())
+        .and_then(|p| p.plan_info.as_ref())
+        .and_then(|i| i.plan_name.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+fn build_fallback_windows(resp: Resp) -> Vec<WindowUsage> {
     let configs = resp
         .user_status
         .and_then(|u| u.cascade)
         .and_then(|c| c.configs)
         .unwrap_or_default();
 
-    let mut windows = Vec::new();
-    for (i, cfg) in configs.into_iter().enumerate() {
-        let Some(quota) = cfg.quota else { continue };
-        let Some(fraction) = quota.remaining_fraction else {
+    struct Group {
+        reset_at: Option<String>,
+        remaining_pct: u32,
+        count: usize,
+    }
+
+    let mut groups: Vec<Group> = Vec::new();
+
+    for cfg in configs {
+        let Some(quota) = cfg.quota else {
             continue;
         };
-        let remaining = (fraction * 100.0).round().clamp(0.0, 100.0) as u32;
-        let label = cfg.label.unwrap_or_else(|| format!("MODELO {}", i + 1));
-        let reset = quota.reset_time.as_ref().and_then(parse_reset);
-        windows.push(WindowUsage::from_percent(
-            &format!("model{i}"),
-            &label,
-            remaining,
-            reset,
-        ));
-        if windows.len() >= 6 {
-            break;
+        let reset_at = quota.reset_time.as_ref().and_then(parse_reset);
+        let remaining = match quota.remaining_fraction {
+            Some(f) => (f * 100.0).round().clamp(0.0, 100.0) as u32,
+            None if quota.reset_time.as_ref().is_some_and(|v| !v.is_null()) => 0,
+            None => continue,
+        };
+
+        if let Some(g) = groups
+            .iter_mut()
+            .find(|g| g.reset_at == reset_at && g.remaining_pct == remaining)
+        {
+            g.count += 1;
+        } else {
+            groups.push(Group {
+                reset_at,
+                remaining_pct: remaining,
+                count: 1,
+            });
         }
     }
-    windows
+
+    groups
+        .into_iter()
+        .enumerate()
+        .map(|(n, g)| {
+            let key = format!("fallback{n}");
+            let label = if g.count == 1 {
+                "Quota · 1 modelo".to_string()
+            } else {
+                format!("Quota · {} modelos", g.count)
+            };
+            let mut w = WindowUsage::from_percent(&key, &label, g.remaining_pct, g.reset_at);
+            w.group = None;
+            w.window_secs = None;
+            w
+        })
+        .collect()
 }
 
 fn parse_reset(v: &serde_json::Value) -> Option<String> {
@@ -379,26 +433,129 @@ mod tests {
     use crate::model::Status;
 
     #[test]
-    fn build_windows_maps_configs_and_caps_at_six() {
-        let resp: Resp =
-            serde_json::from_str(include_str!("../../tests/fixtures/antigravity/user_status.json"))
-                .unwrap();
-        let windows = build_windows(resp);
+    fn fallback_windows_groups_by_reset_and_remaining_and_reads_plan_name() {
+        let resp: Resp = serde_json::from_str(include_str!(
+            "../../tests/fixtures/antigravity/user_status_plan.json"
+        ))
+        .unwrap();
 
-        assert_eq!(windows.len(), 6, "capped even though the fixture has 7 configs");
+        assert_eq!(plan_name(&resp), Some("Pro".to_string()));
 
-        assert_eq!(windows[0].key, "model0");
-        assert_eq!(windows[0].label, "Gemini 2.5 Pro");
+        let windows = build_fallback_windows(resp);
+        assert_eq!(windows.len(), 3, "models without fraction and reset are ignored");
+
+        // Window 0: (reset 2026-11-03T13:03:37Z, 80%) with label "Quota · 2 modelos"
+        assert_eq!(windows[0].key, "fallback0");
+        assert_eq!(windows[0].label, "Quota · 2 modelos");
+        assert_eq!(windows[0].remaining_pct, 80);
+        assert_eq!(windows[0].status, Status::Healthy);
+        assert_eq!(
+            windows[0].reset_at,
+            parse_reset(&serde_json::json!("2026-11-03T13:03:37Z"))
+        );
+        assert!(windows[0].group.is_none());
+        assert!(windows[0].window_secs.is_none());
+
+        // Window 1: (reset 2026-11-10T08:03:37Z, 80%) "Quota · 1 modelo"
+        assert_eq!(windows[1].key, "fallback1");
+        assert_eq!(windows[1].label, "Quota · 1 modelo");
+        assert_eq!(windows[1].remaining_pct, 80);
+        assert_eq!(windows[1].status, Status::Healthy);
+        assert_eq!(
+            windows[1].reset_at,
+            parse_reset(&serde_json::json!("2026-11-10T08:03:37Z"))
+        );
+        assert!(windows[1].group.is_none());
+        assert!(windows[1].window_secs.is_none());
+
+        // Window 2: (reset 2026-11-03T13:03:37Z, 0%, Status::Depleted) "Quota · 1 modelo"
+        assert_eq!(windows[2].key, "fallback2");
+        assert_eq!(windows[2].label, "Quota · 1 modelo");
+        assert_eq!(windows[2].remaining_pct, 0);
+        assert_eq!(windows[2].status, Status::Depleted);
+        assert_eq!(
+            windows[2].reset_at,
+            parse_reset(&serde_json::json!("2026-11-03T13:03:37Z"))
+        );
+        assert!(windows[2].group.is_none());
+        assert!(windows[2].window_secs.is_none());
+    }
+
+    #[test]
+    fn fallback_windows_groups_legacy_user_status_fixture() {
+        let resp: Resp = serde_json::from_str(include_str!(
+            "../../tests/fixtures/antigravity/user_status.json"
+        ))
+        .unwrap();
+
+        assert_eq!(plan_name(&resp), None);
+
+        let windows = build_fallback_windows(resp);
+        assert_eq!(windows.len(), 4);
+
+        assert_eq!(windows[0].key, "fallback0");
+        assert_eq!(windows[0].label, "Quota · 1 modelo");
         assert_eq!(windows[0].remaining_pct, 73);
         assert_eq!(windows[0].status, Status::Healthy);
-        assert!(windows[0].reset_at.is_some());
+        assert_eq!(
+            windows[0].reset_at,
+            parse_reset(&serde_json::json!("2026-01-16T00:00:00Z"))
+        );
 
+        assert_eq!(windows[1].key, "fallback1");
+        assert_eq!(windows[1].label, "Quota · 1 modelo");
         assert_eq!(windows[1].remaining_pct, 10);
         assert_eq!(windows[1].status, Status::Critical);
         assert!(windows[1].reset_at.is_none());
 
+        assert_eq!(windows[2].key, "fallback2");
+        assert_eq!(windows[2].label, "Quota · 1 modelo");
         assert_eq!(windows[2].remaining_pct, 0);
         assert_eq!(windows[2].status, Status::Depleted);
+        assert!(windows[2].reset_at.is_none());
+
+        assert_eq!(windows[3].key, "fallback3");
+        assert_eq!(windows[3].label, "Quota · 4 modelos");
+        assert_eq!(windows[3].remaining_pct, 50);
+        assert_eq!(windows[3].status, Status::Healthy);
+        assert!(windows[3].reset_at.is_none());
+    }
+
+    #[test]
+    fn user_status_plan_does_not_leak_identity_data() {
+        let text = include_str!("../../tests/fixtures/antigravity/user_status_plan.json");
+        let resp: Resp = serde_json::from_str(text).unwrap();
+
+        let debug_resp = format!("{resp:?}");
+        assert!(!debug_resp.contains("fixture-user@example.invalid"));
+        assert!(!debug_resp.contains("Fixture User"));
+        assert!(!debug_resp.contains("avatar"));
+
+        let plan = plan_name(&resp);
+        let windows = build_fallback_windows(resp);
+        let snapshot = ProviderSnapshot {
+            id: "antigravity".to_string(),
+            name: "Antigravity".to_string(),
+            available: true,
+            note: None,
+            windows,
+            total_tokens: None,
+            estimated_cost_usd: None,
+            usage: None,
+            local_models: Vec::new(),
+            active_sessions: Vec::new(),
+            stale_secs: None,
+            auth_failed: false,
+            retry_in_secs: None,
+            fetched_at: None,
+            plan,
+            partial: true,
+        };
+
+        let serialized = serde_json::to_string(&snapshot).unwrap();
+        assert!(!serialized.contains("fixture-user@example.invalid"));
+        assert!(!serialized.contains("Fixture User"));
+        assert!(!serialized.contains("avatar"));
     }
 
     #[test]
