@@ -10,6 +10,7 @@ Releases before 1.4.0 are only tagged in git and described in their
 ## [Unreleased]
 
 - Antigravity page shows quotas by group from the server's quota summary.
+- Antigravity page shows the plan name and a clearly marked partial view when only per-model data is available.
 
 ## [1.5.0] - 2026-10-30
 

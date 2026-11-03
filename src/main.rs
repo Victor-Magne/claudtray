@@ -920,6 +920,8 @@ mod alert_tests {
                 auth_failed: false,
                 retry_in_secs: None,
                 fetched_at: None,
+                plan: None,
+                partial: false,
             }],
             catalog: Vec::new(),
             history: Default::default(),

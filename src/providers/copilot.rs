@@ -101,6 +101,8 @@ impl CopilotProvider {
             auth_failed: false,
             retry_in_secs: None,
             fetched_at: None,
+            plan: None,
+            partial: false,
         }
     }
 }
