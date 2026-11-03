@@ -9,6 +9,8 @@ Releases before 1.4.0 are only tagged in git and described in their
 
 ## [Unreleased]
 
+- Antigravity page shows quotas by group from the server's quota summary.
+
 ## [1.5.0] - 2026-10-30
 
 ### Added
