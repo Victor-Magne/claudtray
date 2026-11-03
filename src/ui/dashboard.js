@@ -321,10 +321,35 @@ function renderCards() {
     // Claude: rings + the usage cards built from the local transcripts.
     renderUsagePage(wrap, p);
   } else if (hasWindows) {
-    p.windows.forEach((w) => {
-      const wide = w.key === "opus" || p.windows.length === 1;
-      wrap.appendChild(card(w, wide));
-    });
+    const hasGroups = p.windows.some((w) => w.group != null);
+    if (hasGroups) {
+      const grouped = new Map();
+      p.windows.forEach((w) => {
+        const g = w.group || "";
+        if (!grouped.has(g)) grouped.set(g, []);
+        grouped.get(g).push(w);
+      });
+      grouped.forEach((wins, groupName) => {
+        if (groupName) {
+          wrap.appendChild(div("group-title", groupName));
+        }
+        wins.forEach((w) => {
+          const wide = w.key === "opus" || wins.length === 1;
+          const title =
+            w.window_secs === 18000
+              ? t("win5h")
+              : w.window_secs === 604800
+              ? t("win7d")
+              : w.label;
+          wrap.appendChild(card(w, wide, title));
+        });
+      });
+    } else {
+      p.windows.forEach((w) => {
+        const wide = w.key === "opus" || p.windows.length === 1;
+        wrap.appendChild(card(w, wide));
+      });
+    }
   }
 
   if (p.active_sessions && p.active_sessions.length > 0) {
@@ -610,7 +635,7 @@ function sparkline(values, status) {
   return svg;
 }
 
-function card(w, wide) {
+function card(w, wide, title) {
   const el = document.createElement("div");
   el.className = "card" + (wide ? " wide" : "");
   const sc = "s-" + w.status;
@@ -620,7 +645,7 @@ function card(w, wide) {
   const lbl = document.createElement("span");
   lbl.className = "wlabel";
   // textContent — w.label originates from external API responses (XSS sink).
-  lbl.textContent = w.label;
+  lbl.textContent = title != null ? title : w.label;
   const badge = document.createElement("span");
   badge.className = "badge " + sc;
   badge.textContent = statusLabel(w.status);

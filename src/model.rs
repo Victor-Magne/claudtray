@@ -68,6 +68,10 @@ pub struct WindowUsage {
     /// 3% (a minute of use says nothing about the pace). Set by the monitor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pace_pct: Option<i32>,
+    /// Logical group name for providers that report grouped quota buckets
+    /// (e.g. Antigravity's quota summary).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
 }
 
 impl WindowUsage {
@@ -87,6 +91,7 @@ impl WindowUsage {
             estimated_exhaustion: None,
             window_secs: None,
             pace_pct: None,
+            group: None,
         }
     }
 }
